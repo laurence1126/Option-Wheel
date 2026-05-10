@@ -97,6 +97,7 @@ report = WheelPerformanceReport(result)
 report.summary_table()
 report.trade_breakdown_table()
 fig = report.plot_equity_and_drawdown()
+rolling_fig = report.plot_rolling_metrics(window=63)
 ```
 
 ## Strategy Parameters
@@ -158,6 +159,8 @@ take_profit
 - Total premium collected
 - Average IV and delta
 - Average and maximum leverage ratio
+
+`WheelPerformanceReport.plot_rolling_metrics(window=63)` plots rolling annualized return, annualized volatility, and Sharpe from the strategy equity curve.
 
 ## RF Cash Yield
 

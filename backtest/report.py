@@ -161,42 +161,131 @@ class WheelPerformanceReport:
         drawdown = self._drawdown_series(self.equity_curve)
         underlying_drawdown = self._drawdown_series(self.underlying_curve)
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5), sharex=True)
+        strategy_color = "#2563eb"
+        underlying_color = "#334155"
+        drawdown_color = "#dc2626"
 
-        ax1.plot(self.equity_curve.index, self.equity_curve.values, label="Strategy", color="blue", linewidth=2)
+        ax1.plot(self.equity_curve.index, self.equity_curve.values, label="Strategy", color=strategy_color, linewidth=2.25)
         if not self.underlying_curve.empty:
             ax1.plot(
                 self.underlying_curve.index,
                 self.underlying_curve.values,
                 label=f"{self.result.symbol} Buy & Hold",
-                color="black",
+                color=underlying_color,
                 linestyle="--",
-                linewidth=1.75,
-                alpha=0.8,
+                linewidth=1.8,
+                alpha=0.85,
             )
         ax1.set_title(f"Equity Curve for {self.result.symbol}", fontsize=14, fontweight="bold")
         ax1.set_ylabel("Equity ($)", fontsize=12)
-        ax1.grid(True, alpha=0.3)
+        ax1.grid(True, color="#e2e8f0", linewidth=0.8)
         ax1.legend(fontsize=11)
         ax1.set_xlabel("Date", fontsize=12)
 
-        ax2.fill_between(drawdown.index, drawdown.values, 0, color="red", alpha=0.3, label="Strategy")
-        ax2.plot(drawdown.index, drawdown.values, color="red", linewidth=2)
+        ax2.fill_between(drawdown.index, drawdown.values, 0, color=drawdown_color, alpha=0.18, label="Strategy")
+        ax2.plot(drawdown.index, drawdown.values, color=drawdown_color, linewidth=2)
         if not underlying_drawdown.empty:
             ax2.plot(
                 underlying_drawdown.index,
                 underlying_drawdown.values,
-                color="black",
+                color=underlying_color,
                 linestyle="--",
-                linewidth=1.75,
-                alpha=0.8,
+                linewidth=1.8,
+                alpha=0.85,
                 label=f"{self.result.symbol} Buy & Hold",
             )
         ax2.set_title(f"Drawdown for {self.result.symbol}", fontsize=14, fontweight="bold")
         ax2.set_ylabel("Drawdown (%)", fontsize=12)
         ax2.set_xlabel("Date", fontsize=12)
-        ax2.grid(True, alpha=0.3)
+        ax2.grid(True, color="#e2e8f0", linewidth=0.8)
         ax2.legend(fontsize=11)
         ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.1%}"))
+
+        plt.tight_layout()
+        return fig
+
+    def plot_rolling_metrics(self, window: int = 63) -> plt.Figure:
+        if window < 2:
+            raise ValueError("window must be at least 2 trading days.")
+
+        rolling_metrics = self._rolling_metrics(window=window)
+        stats = self.summary_stats()
+        full_period_volatility = self._annualized_volatility(self.returns)
+        fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+        return_color = "#2563eb"
+        volatility_color = "#d97706"
+        sharpe_color = "#059669"
+        reference_color = "#475569"
+        zero_line_color = "#94a3b8"
+        grid_color = "#e2e8f0"
+
+        axes[0].plot(
+            rolling_metrics.index,
+            rolling_metrics["annualized_return"],
+            color=return_color,
+            linewidth=2.25,
+            label="Annualized Return",
+        )
+        axes[0].axhline(0, color=zero_line_color, linewidth=1, alpha=0.8)
+        if stats["cagr"] is not None and not pd.isna(stats["cagr"]):
+            axes[0].axhline(
+                stats["cagr"],
+                color=reference_color,
+                linestyle="--",
+                linewidth=1.4,
+                alpha=0.85,
+                label=f"Full-Period CAGR ({self._fmt_percent(stats['cagr'])})",
+            )
+        axes[0].set_title(f"{window}-Day Rolling Annualized Return", fontsize=13, fontweight="bold")
+        axes[0].set_ylabel("Return", fontsize=11)
+        axes[0].grid(True, color=grid_color, linewidth=0.8)
+        axes[0].legend(fontsize=10)
+        axes[0].yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.1%}"))
+
+        axes[1].plot(
+            rolling_metrics.index,
+            rolling_metrics["annualized_volatility"],
+            color=volatility_color,
+            linewidth=2.25,
+            label="Annualized Volatility",
+        )
+        if full_period_volatility is not None and not pd.isna(full_period_volatility):
+            axes[1].axhline(
+                full_period_volatility,
+                color=reference_color,
+                linestyle="--",
+                linewidth=1.4,
+                alpha=0.85,
+                label=f"Full-Period Vol ({self._fmt_percent(full_period_volatility)})",
+            )
+        axes[1].set_title(f"{window}-Day Rolling Annualized Volatility", fontsize=13, fontweight="bold")
+        axes[1].set_ylabel("Volatility", fontsize=11)
+        axes[1].grid(True, color=grid_color, linewidth=0.8)
+        axes[1].legend(fontsize=10)
+        axes[1].yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.1%}"))
+
+        axes[2].plot(
+            rolling_metrics.index,
+            rolling_metrics["sharpe"],
+            color=sharpe_color,
+            linewidth=2.25,
+            label="Sharpe",
+        )
+        axes[2].axhline(0, color=zero_line_color, linewidth=1, alpha=0.8)
+        if stats["sharpe"] is not None and not pd.isna(stats["sharpe"]):
+            axes[2].axhline(
+                stats["sharpe"],
+                color=reference_color,
+                linestyle="--",
+                linewidth=1.4,
+                alpha=0.85,
+                label=f"Full-Period Sharpe ({self._fmt_decimal(stats['sharpe'])})",
+            )
+        axes[2].set_title(f"{window}-Day Rolling Sharpe", fontsize=13, fontweight="bold")
+        axes[2].set_ylabel("Sharpe", fontsize=11)
+        axes[2].set_xlabel("Date", fontsize=11)
+        axes[2].grid(True, color=grid_color, linewidth=0.8)
+        axes[2].legend(fontsize=10)
 
         plt.tight_layout()
         return fig
@@ -214,6 +303,34 @@ class WheelPerformanceReport:
         if starting_spot == 0:
             return pd.Series(dtype=float)
         return spot_series / starting_spot * self.result.initial_cash
+
+    def _rolling_metrics(self, window: int) -> pd.DataFrame:
+        returns = self.returns.dropna()
+        if returns.empty:
+            return pd.DataFrame(
+                columns=["annualized_return", "annualized_volatility", "sharpe"],
+                index=pd.DatetimeIndex([], name=self.equity_curve.index.name),
+            )
+
+        annualized_return = returns.add(1.0).rolling(window).apply(np.prod, raw=True).pow(252.0 / window).sub(1.0)
+        annualized_volatility = returns.rolling(window).std().mul(np.sqrt(252.0))
+        sharpe = annualized_return.div(annualized_volatility.replace(0.0, np.nan))
+        return pd.DataFrame(
+            {
+                "annualized_return": annualized_return,
+                "annualized_volatility": annualized_volatility,
+                "sharpe": sharpe,
+            }
+        ).dropna(how="all")
+
+    @staticmethod
+    def _annualized_volatility(returns: pd.Series) -> float | None:
+        if returns.empty:
+            return None
+        volatility = float(returns.std())
+        if volatility <= 0:
+            return None
+        return volatility * np.sqrt(252.0)
 
     @staticmethod
     def _drawdown_series(curve: pd.Series) -> pd.Series:
