@@ -40,6 +40,10 @@ def run_grid_search(
     call_exp_days: int = 0,
     initial_cash: float = 10_000.0,
     leverage: float = 2.0,
+    rf_series: str = "DGS3MO",
+    rf_penalty_multiple: float = 0.85,
+    rf_path: str | None = None,
+    refresh_rf: bool = False,
     take_profit_multiple: float | None = None,
     data_root: str = "data",
     max_workers: int | None = None,
@@ -63,6 +67,10 @@ def run_grid_search(
             "call_exp_days": call_exp_days,
             "initial_cash": initial_cash,
             "leverage": leverage,
+            "rf_series": rf_series,
+            "rf_penalty_multiple": rf_penalty_multiple,
+            "rf_path": rf_path,
+            "refresh_rf": refresh_rf,
             "data_root": data_root,
         }
         for target_delta, stop_loss_multiple, put_exp_days in product(

@@ -77,6 +77,7 @@ result = run_wheel_backtest(
     call_exp_days=14,
     initial_cash=20_000,
     leverage=2.0,
+    rf_penalty_multiple=0.85,
     stop_loss_multiple=3.0,
     take_profit_multiple=None,
 )
@@ -97,6 +98,10 @@ fig = report.plot_equity_and_drawdown()
 | `end_date` | required | Backtest end date. |
 | `initial_cash` | `100_000` | Starting portfolio cash. |
 | `leverage` | `1.0` | Cash multiplier used when checking put strike notional capacity. |
+| `rf_series` | `"DGS3MO"` | FRED short-rate series used for cash interest. Supported values: `DGS1MO`, `DGS3MO`, `DGS6MO`, `DTB3`, `EFFR`, `SOFR`. |
+| `rf_penalty_multiple` | `0.85` | Haircut applied to the selected rf series before cash interest accrues. Example: `0.85` means cash earns 85% of the selected rate. |
+| `rf_path` | `None` | Optional local CSV path for historical rates. Defaults to `data/risk_free/{rf_series}.csv`. |
+| `refresh_rf` | `False` | If `True`, re-download the selected rate series from FRED and update the local cache. |
 | `target_delta` | `0.15` | Target absolute option delta for put/call selection. |
 | `put_exp_days` | `25` | Minimum DTE for short put selection. |
 | `call_exp_days` | `25` | Minimum DTE for covered call selection. Set to `0` to skip calls and liquidate assigned shares immediately. |
@@ -110,7 +115,7 @@ fig = report.plot_equity_and_drawdown()
 
 - `trades`: completed option legs with outcome, premium, cash flow, days held, leverage ratio, and buyback price where applicable.
 - `events`: start, sell, expiration, stop-loss, take-profit, liquidation, and final state events.
-- `daily_pnl`: daily portfolio accounting.
+- `daily_pnl`: daily portfolio accounting, including the selected daily `rf` used for cash interest.
 - `equity_curve`: strategy equity indexed by date.
 - `ending_cash`, `ending_shares`, `ending_spot`, `option_position`, `ending_equity`.
 
@@ -130,6 +135,7 @@ take_profit
 `WheelPerformanceReport.summary_table()` includes:
 
 - Total return and CAGR
+- Cash interest earned
 - Strategy Sharpe
 - Underlying Sharpe
 - Max drawdown
@@ -141,6 +147,31 @@ take_profit
 - Total premium collected
 - Average IV and delta
 - Average and maximum leverage ratio
+
+Cash interest uses a historical short-rate series from FRED. The default is the 3-month Treasury constant maturity rate, `DGS3MO`. You can choose:
+
+```text
+DGS1MO, DGS3MO, DGS6MO, DTB3, EFFR, SOFR
+```
+
+On first use, the loader downloads and caches the selected series at:
+
+```text
+data/risk_free/{series}.csv
+```
+
+To refresh the local copy:
+
+```python
+result = run_wheel_backtest(
+    "QQQ",
+    "2016-03-01",
+    "2026-03-15",
+    rf_series="DGS3MO",
+    rf_penalty_multiple=0.85,
+    refresh_rf=True,
+)
+```
 
 `plot_equity_and_drawdown()` shows:
 
@@ -166,6 +197,7 @@ grid_results = run_grid_search(
     call_exp_days=0,
     initial_cash=20_000,
     leverage=2.0,
+    rf_penalty_multiple=0.85,
     max_workers=None,
     sort_by="sharpe",
 )

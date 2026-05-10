@@ -44,6 +44,9 @@ class WheelPerformanceReport:
         call_aways = int((short_trades["outcome"] == "called_away").sum()) if not short_trades.empty else 0
         cut_losses = int((short_trades["outcome"] == "cut_loss").sum()) if not short_trades.empty else 0
         take_profits = int((short_trades["outcome"] == "take_profit").sum()) if not short_trades.empty else 0
+        total_cash_interest = 0.0
+        if not self.result.daily_pnl.empty and "cash_interest" in self.result.daily_pnl.columns:
+            total_cash_interest = float(self.result.daily_pnl["cash_interest"].sum())
         avg_liquidation_cost = None
         if not short_trades.empty and "liquidation_cost" in short_trades.columns:
             liquidation_costs = short_trades["liquidation_cost"].dropna()
@@ -57,6 +60,7 @@ class WheelPerformanceReport:
             "initial_cash": self.result.initial_cash,
             "ending_equity": self.result.ending_equity,
             "net_profit": self.result.ending_equity - self.result.initial_cash,
+            "total_cash_interest": total_cash_interest,
             "total_return": total_return,
             "cagr": cagr,
             "sharpe": sharpe,
@@ -91,6 +95,7 @@ class WheelPerformanceReport:
             ("Initial Cash", self._fmt_currency(stats["initial_cash"])),
             ("Ending Equity", self._fmt_currency(stats["ending_equity"])),
             ("Net Profit", self._fmt_currency(stats["net_profit"])),
+            ("Cash Interest Earned", self._fmt_currency(stats["total_cash_interest"])),
             ("Total Return", self._fmt_percent(stats["total_return"])),
             ("CAGR", self._fmt_percent(stats["cagr"])),
             ("Sharpe", self._fmt_decimal(stats["sharpe"])),

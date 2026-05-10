@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from option_data_loader import OptionDataLoader
+from rf_loader import load_rf_rates
 
 
 @dataclass(slots=True)
@@ -16,6 +17,10 @@ class WheelConfig:
     end_date: str | date
     initial_cash: float = 100_000.0
     leverage: float = 1.0
+    rf_series: str = "DGS3MO"
+    rf_penalty_multiple: float = 0.85
+    rf_path: str | None = None
+    refresh_rf: bool = False
     target_delta: float = 0.15
     stop_loss_multiple: float | None = 3.0
     take_profit_multiple: float | None = None
@@ -67,6 +72,13 @@ class WheelBacktester:
         price_history = price_history.loc[(price_history.index >= start_ts) & (price_history.index <= end_ts)].copy()
         if price_history.empty:
             raise ValueError("No equity price history is available for the requested date range.")
+        rf_rates = load_rf_rates(
+            price_history.index,
+            data_root=self.config.data_root,
+            series=self.config.rf_series,
+            cache_path=self.config.rf_path,
+            refresh=self.config.refresh_rf,
+        )
 
         cash = float(self.config.initial_cash)
         shares = 0
@@ -103,7 +115,14 @@ class WheelBacktester:
             option_expiry_cash_flow_today = 0.0
             option_stop_loss_cash_flow_today = 0.0
             option_take_profit_cash_flow_today = 0.0
+            cash_interest_today = 0.0
             settled_today = False
+
+            raw_rf_today = float(rf_rates.loc[trade_ts])
+            rf_today = raw_rf_today * self.config.rf_penalty_multiple
+            if daily_rows and rf_today > 0:
+                cash_interest_today = max(cash, 0.0) * rf_today / 252.0
+                cash += cash_interest_today
 
             if open_leg is not None and trade_ts == open_leg.expiration:
                 outcome = "expired"
@@ -368,7 +387,7 @@ class WheelBacktester:
                 + option_stop_loss_cash_flow_today
                 + option_take_profit_cash_flow_today
             )
-            total_pnl = stock_pnl + option_pnl
+            total_pnl = stock_pnl + option_pnl + cash_interest_today
             equity = cash + stock_value + option_position
             nav_change = 0.0 if not daily_rows else total_pnl
 
@@ -396,8 +415,12 @@ class WheelBacktester:
                     "option_expiry_cash_flow": option_expiry_cash_flow_today,
                     "option_stop_loss_cash_flow": option_stop_loss_cash_flow_today,
                     "option_take_profit_cash_flow": option_take_profit_cash_flow_today,
+                    "raw_rf": raw_rf_today,
+                    "rf": rf_today,
+                    "cash_interest": cash_interest_today,
                     "stock_pnl": stock_pnl,
                     "option_pnl": option_pnl,
+                    "cash_pnl": cash_interest_today,
                     "total_pnl": total_pnl,
                     "open_contract": open_leg.id if open_leg is not None else None,
                     "option_side": "short" if open_leg is not None else None,
@@ -603,6 +626,10 @@ def run_wheel_backtest(
     call_exp_days: int = 25,
     initial_cash: float = 100_000.0,
     leverage: float = 1.0,
+    rf_series: str = "DGS3MO",
+    rf_penalty_multiple: float = 0.85,
+    rf_path: str | None = None,
+    refresh_rf: bool = False,
     data_root: str = "data",
 ) -> BacktestResult:
     config = WheelConfig(
@@ -611,6 +638,10 @@ def run_wheel_backtest(
         end_date=end_date,
         initial_cash=initial_cash,
         leverage=leverage,
+        rf_series=rf_series,
+        rf_penalty_multiple=rf_penalty_multiple,
+        rf_path=rf_path,
+        refresh_rf=refresh_rf,
         target_delta=target_delta,
         stop_loss_multiple=stop_loss_multiple,
         take_profit_multiple=take_profit_multiple,
