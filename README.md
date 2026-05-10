@@ -23,10 +23,17 @@ The project loads local monthly CSV files, selects short puts and covered calls 
 .
 ├── backtest.py              # Wheel strategy simulation
 ├── option_data_loader.py    # Local CSV loader and chain lookup
+├── rf_loader.py             # FRED short-rate loader and local cache helper
+├── vix_loader.py            # FRED VIX loader and local cache helper
 ├── report.py                # Summary tables and plots
+├── grid_search.py           # Multiprocessing parameter sweep helper
 ├── fetch_option_data.py     # IVolatility data fetch helper
 ├── run_backtest.ipynb       # Notebook workflow
 └── data/
+    ├── risk_free/
+    │   └── DGS3MO.csv       # Cached FRED rf series, created on demand
+    ├── market/
+    │   └── VIXCLS.csv       # Cached FRED VIX series, created on demand
     └── SYMBOL/
         └── YYYY-MM.csv      # Historical option-chain data
 ```
@@ -77,6 +84,7 @@ result = run_wheel_backtest(
     call_exp_days=14,
     initial_cash=20_000,
     leverage=2.0,
+    rf_series="DGS3MO",
     rf_penalty_multiple=0.85,
     stop_loss_multiple=3.0,
     take_profit_multiple=None,
@@ -91,23 +99,23 @@ fig = report.plot_equity_and_drawdown()
 
 ## Strategy Parameters
 
-| Parameter | Default | Description |
-| --- | ---: | --- |
-| `symbol` | required | Ticker symbol matching a folder under `data/`. |
-| `start_date` | required | Backtest start date. |
-| `end_date` | required | Backtest end date. |
-| `initial_cash` | `100_000` | Starting portfolio cash. |
-| `leverage` | `1.0` | Cash multiplier used when checking put strike notional capacity. |
-| `rf_series` | `"DGS3MO"` | FRED short-rate series used for cash interest. Supported values: `DGS1MO`, `DGS3MO`, `DGS6MO`, `DTB3`, `EFFR`, `SOFR`. |
-| `rf_penalty_multiple` | `0.85` | Haircut applied to the selected rf series before cash interest accrues. Example: `0.85` means cash earns 85% of the selected rate. |
-| `rf_path` | `None` | Optional local CSV path for historical rates. Defaults to `data/risk_free/{rf_series}.csv`. |
-| `refresh_rf` | `False` | If `True`, re-download the selected rate series from FRED and update the local cache. |
-| `target_delta` | `0.15` | Target absolute option delta for put/call selection. |
-| `put_exp_days` | `25` | Minimum DTE for short put selection. |
-| `call_exp_days` | `25` | Minimum DTE for covered call selection. Set to `0` to skip calls and liquidate assigned shares immediately. |
-| `stop_loss_multiple` | `3.0` | Close a short put when the option high is above `original_premium * stop_loss_multiple`. If the option opens below the threshold, the buyback fills at the threshold; if it opens above the threshold, the buyback fills at the open price. Use `None` or `<= 0` to disable. |
-| `take_profit_multiple` | `None` | Close a short put when current put price is below `original_premium * take_profit_multiple`. Example: `0.2` closes at 20% of original premium. |
-| `data_root` | `"data"` | Root directory containing symbol CSV folders. |
+| Parameter              |    Default | Description                                                                                                                                                                                                                                                                  |
+| ---------------------- | ---------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `symbol`               |   required | Ticker symbol matching a folder under `data/`.                                                                                                                                                                                                                               |
+| `start_date`           |   required | Backtest start date.                                                                                                                                                                                                                                                         |
+| `end_date`             |   required | Backtest end date.                                                                                                                                                                                                                                                           |
+| `initial_cash`         |  `100_000` | Starting portfolio cash.                                                                                                                                                                                                                                                     |
+| `leverage`             |      `1.0` | Cash multiplier used when checking put strike notional capacity.                                                                                                                                                                                                             |
+| `rf_series`            | `"DGS3MO"` | FRED short-rate series used for cash interest. Supported values: `DGS1MO`, `DGS3MO`, `DGS6MO`, `DTB3`, `EFFR`, `SOFR`.                                                                                                                                                       |
+| `rf_penalty_multiple`  |     `0.85` | Haircut applied to the selected rf series before cash interest accrues. Example: if `DGS3MO` is 5%, `0.85` makes cash earn 4.25%.                                                                                                                                            |
+| `rf_path`              |     `None` | Optional local CSV path for historical rates. Defaults to `data/risk_free/{rf_series}.csv`.                                                                                                                                                                                  |
+| `refresh_rf`           |    `False` | If `True`, re-download the selected rate series from FRED and update the local cache.                                                                                                                                                                                        |
+| `target_delta`         |     `0.15` | Target absolute option delta for put/call selection.                                                                                                                                                                                                                         |
+| `put_exp_days`         |       `25` | Minimum DTE for short put selection.                                                                                                                                                                                                                                         |
+| `call_exp_days`        |       `25` | Minimum DTE for covered call selection. Set to `0` to skip calls and liquidate assigned shares immediately.                                                                                                                                                                  |
+| `stop_loss_multiple`   |      `3.0` | Close a short put when the option high is above `original_premium * stop_loss_multiple`. If the option opens below the threshold, the buyback fills at the threshold; if it opens above the threshold, the buyback fills at the open price. Use `None` or `<= 0` to disable. |
+| `take_profit_multiple` |     `None` | Close a short put when current put price is below `original_premium * take_profit_multiple`. Example: `0.2` closes at 20% of original premium.                                                                                                                               |
+| `data_root`            |   `"data"` | Root directory containing symbol CSV folders.                                                                                                                                                                                                                                |
 
 ## Outputs
 
@@ -115,7 +123,7 @@ fig = report.plot_equity_and_drawdown()
 
 - `trades`: completed option legs with outcome, premium, cash flow, days held, leverage ratio, and buyback price where applicable.
 - `events`: start, sell, expiration, stop-loss, take-profit, liquidation, and final state events.
-- `daily_pnl`: daily portfolio accounting, including the selected daily `rf` used for cash interest.
+- `daily_pnl`: daily portfolio accounting, including `raw_rf`, haircut-adjusted `rf`, and `cash_interest`.
 - `equity_curve`: strategy equity indexed by date.
 - `ending_cash`, `ending_shares`, `ending_spot`, `option_position`, `ending_equity`.
 
@@ -148,6 +156,8 @@ take_profit
 - Average IV and delta
 - Average and maximum leverage ratio
 
+## RF Cash Yield
+
 Cash interest uses a historical short-rate series from FRED. The default is the 3-month Treasury constant maturity rate, `DGS3MO`. You can choose:
 
 ```text
@@ -160,6 +170,15 @@ On first use, the loader downloads and caches the selected series at:
 data/risk_free/{series}.csv
 ```
 
+The daily cash yield calculation is:
+
+```python
+rf = raw_rf * rf_penalty_multiple
+cash_interest = max(cash, 0) * rf / 252
+```
+
+`raw_rf` and `rf` are annualized decimal rates in `daily_pnl`. For example, 5% is stored as `0.05`.
+
 To refresh the local copy:
 
 ```python
@@ -171,6 +190,32 @@ result = run_wheel_backtest(
     rf_penalty_multiple=0.85,
     refresh_rf=True,
 )
+```
+
+## VIX Data
+
+`vix_loader.py` provides the same local-cache pattern for FRED VIX series. The default is `VIXCLS`, the Cboe VIX close.
+
+Supported series:
+
+```text
+VIXCLS, VXVCLS, VXNCLS, RVXCLS
+```
+
+Example:
+
+```python
+from option_data_loader import OptionDataLoader
+from vix_loader import load_vix
+
+price_history = OptionDataLoader("QQQ").build_price_history()
+vix = load_vix(price_history.index, series="VIXCLS")
+```
+
+On first use, the loader downloads and caches the selected series at:
+
+```text
+data/market/{series}.csv
 ```
 
 `plot_equity_and_drawdown()` shows:
@@ -197,6 +242,7 @@ grid_results = run_grid_search(
     call_exp_days=0,
     initial_cash=20_000,
     leverage=2.0,
+    rf_series="DGS3MO",
     rf_penalty_multiple=0.85,
     max_workers=None,
     sort_by="sharpe",
