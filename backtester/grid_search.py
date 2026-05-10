@@ -7,8 +7,8 @@ from typing import Any
 
 import pandas as pd
 
-from backtest.backtest import run_wheel_backtest
-from backtest.report import WheelPerformanceReport
+from backtester.backtest import run_wheel_backtest
+from backtester.report import WheelPerformanceReport
 
 
 def _run_one_grid_case(params: dict[str, Any]) -> dict[str, Any]:
