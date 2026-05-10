@@ -149,6 +149,7 @@ take_profit
 - Strategy Sharpe
 - Underlying Sharpe
 - Max drawdown
+- Hit rate, where completed short option legs with positive `cash_flow` count as hits
 - Puts sold
 - Assignments
 - Cut losses and put cut-loss rate

@@ -44,6 +44,9 @@ class WheelPerformanceReport:
         call_aways = int((short_trades["outcome"] == "called_away").sum()) if not short_trades.empty else 0
         cut_losses = int((short_trades["outcome"] == "cut_loss").sum()) if not short_trades.empty else 0
         take_profits = int((short_trades["outcome"] == "take_profit").sum()) if not short_trades.empty else 0
+        hits = 0
+        if not short_trades.empty and "cash_flow" in short_trades.columns:
+            hits = int((short_trades["cash_flow"] > 0).sum())
         total_cash_interest = 0.0
         if not self.result.daily_pnl.empty and "cash_interest" in self.result.daily_pnl.columns:
             total_cash_interest = float(self.result.daily_pnl["cash_interest"].sum())
@@ -73,6 +76,8 @@ class WheelPerformanceReport:
             "call_aways": call_aways,
             "cut_losses": cut_losses,
             "take_profits": take_profits,
+            "hits": hits,
+            "hit_rate": hits / len(short_trades) if not short_trades.empty else None,
             "put_assignment_rate": assignments / puts if puts else None,
             "put_cut_loss_rate": cut_losses / puts if puts else None,
             "put_take_profit_rate": take_profits / puts if puts else None,
@@ -102,6 +107,7 @@ class WheelPerformanceReport:
             ("Underlying Sharpe", self._fmt_decimal(stats["underlying_sharpe"])),
             ("Max Drawdown", self._fmt_percent(stats["max_drawdown"])),
             ("Completed Legs", int(stats["completed_legs"])),
+            ("Hit Rate", self._fmt_percent(stats["hit_rate"])),
             ("Puts Sold", int(stats["puts_sold"])),
             ("Assignments", int(stats["assignments"])),
             ("Cut Losses", int(stats["cut_losses"])),
