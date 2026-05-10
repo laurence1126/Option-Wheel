@@ -6,8 +6,8 @@ from typing import Any
 
 import pandas as pd
 
-from option_data_loader import OptionDataLoader
-from rf_loader import load_rf_rates
+from data_loader.option_loader import OptionDataLoader
+from data_loader.rf_loader import load_rf_rates
 
 
 @dataclass(slots=True)

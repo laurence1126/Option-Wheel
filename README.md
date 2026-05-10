@@ -21,19 +21,21 @@ The project loads local monthly CSV files, selects short puts and covered calls 
 
 ```text
 .
-├── backtest.py              # Wheel strategy simulation
-├── option_data_loader.py    # Local CSV loader and chain lookup
-├── rf_loader.py             # FRED short-rate loader and local cache helper
-├── vix_loader.py            # FRED VIX loader and local cache helper
-├── report.py                # Summary tables and plots
-├── grid_search.py           # Multiprocessing parameter sweep helper
-├── fetch_option_data.py     # IVolatility data fetch helper
+├── backtest/
+│   ├── backtest.py          # Wheel strategy simulation
+│   ├── report.py            # Summary tables and plots
+│   └── grid_search.py       # Multiprocessing parameter sweep helper
+├── data_loader/
+│   ├── option_loader.py     # Local option-chain CSV loader
+│   ├── rf_loader.py         # FRED short-rate loader and local cache helper
+│   ├── vix_loader.py        # FRED VIX loader and local cache helper
+│   └── fetch_option_data.py # IVolatility data fetch helper
 ├── run_backtest.ipynb       # Notebook workflow
 └── data/
     ├── risk_free/
-    │   └── DGS3MO.csv       # Cached FRED rf series, created on demand
+    │   └── DGS3MO.csv       # Cached FRED rf series
     ├── market/
-    │   └── VIXCLS.csv       # Cached FRED VIX series, created on demand
+    │   └── VIXCLS.csv       # Cached FRED VIX series
     └── SYMBOL/
         └── YYYY-MM.csv      # Historical option-chain data
 ```
@@ -72,8 +74,8 @@ If you only want to run backtests from existing CSV data, `ivolatility` and `req
 ## Quick Start
 
 ```python
-from backtest import run_wheel_backtest
-from report import WheelPerformanceReport
+from backtest.backtest import run_wheel_backtest
+from backtest.report import WheelPerformanceReport
 
 result = run_wheel_backtest(
     symbol="QQQ",
@@ -205,8 +207,8 @@ VIXCLS, VXVCLS, VXNCLS, RVXCLS
 Example:
 
 ```python
-from option_data_loader import OptionDataLoader
-from vix_loader import load_vix
+from data_loader.option_loader import OptionDataLoader
+from data_loader.vix_loader import load_vix
 
 price_history = OptionDataLoader("QQQ").build_price_history()
 vix = load_vix(price_history.index, series="VIXCLS")
@@ -230,7 +232,7 @@ data/market/{series}.csv
 `grid_search.py` provides a multiprocessing helper for sweeping strategy parameters:
 
 ```python
-from grid_search import run_grid_search
+from backtest.grid_search import run_grid_search
 
 grid_results = run_grid_search(
     symbol="QQQ",
@@ -254,7 +256,7 @@ grid_results.head(20)
 You can also run it directly:
 
 ```bash
-python grid_search.py
+python -m backtest.grid_search
 ```
 
 ## Fetching Data
@@ -275,12 +277,12 @@ export IVOLATILITY_API_KEY="YOUR_API_KEY_HERE"
 ```
 
 ```python
-from fetch_option_data import fetch_data_by_month
+from data_loader.fetch_option_data import fetch_data_by_month
 
 fetch_data_by_month("QQQ", "2016-01-01", "2026-03-15")
 ```
 
-The real `.config` file is ignored by Git. Use `.config.example` as the template.
+The real `.config` file is ignored by Git.
 
 ## Notes And Assumptions
 

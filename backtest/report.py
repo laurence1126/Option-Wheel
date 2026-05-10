@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from backtest import BacktestResult
+from backtest.backtest import BacktestResult
 
 
 @dataclass

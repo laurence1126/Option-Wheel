@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pandas as pd
 
-
 SUPPORTED_VIX_SERIES = ("VIXCLS", "VXVCLS", "VXNCLS", "RVXCLS")
 FRED_GRAPH_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 
@@ -33,15 +32,6 @@ def load_vix(
     query_index = pd.DatetimeIndex(dates).normalize()
     aligned = vix.reindex(vix.index.union(query_index)).sort_index().ffill().bfill()
     return aligned.reindex(query_index).rename("vix")
-
-
-def load_vixcls(
-    dates: pd.Index,
-    data_root: str = "data",
-    cache_path: str | None = None,
-    refresh: bool = False,
-) -> pd.Series:
-    return load_vix(dates, data_root=data_root, series="VIXCLS", cache_path=cache_path, refresh=refresh)
 
 
 def _normalize_vix_frame(frame: pd.DataFrame, series: str) -> pd.Series:

@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pandas as pd
 
-
 SUPPORTED_RISK_FREE_SERIES = ("DGS1MO", "DGS3MO", "DGS6MO", "DTB3", "EFFR", "SOFR")
 FRED_GRAPH_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 
@@ -33,15 +32,6 @@ def load_rf_rates(
     query_index = pd.DatetimeIndex(dates).normalize()
     aligned = rates.reindex(rates.index.union(query_index)).sort_index().ffill().bfill()
     return aligned.reindex(query_index).rename("rf")
-
-
-def load_dgs3mo_rates(
-    dates: pd.Index,
-    data_root: str = "data",
-    cache_path: str | None = None,
-    refresh: bool = False,
-) -> pd.Series:
-    return load_rf_rates(dates, data_root=data_root, series="DGS3MO", cache_path=cache_path, refresh=refresh)
 
 
 def _normalize_rate_frame(frame: pd.DataFrame, series: str) -> pd.Series:
