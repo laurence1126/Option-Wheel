@@ -1,11 +1,35 @@
-import os, sys
+import configparser
+import os
+from pathlib import Path
+
 import pandas as pd
 import ivolatility as ivol
 import requests
 
 
+def load_ivolatility_api_key(config_path=".config"):
+    env_key = os.getenv("IVOLATILITY_API_KEY")
+    if env_key:
+        return env_key
+
+    parser = configparser.ConfigParser()
+    path = Path(config_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Missing {path}. Create it or set IVOLATILITY_API_KEY.")
+
+    parser.read(path)
+    try:
+        api_key = parser["ivolatility"]["api_key"].strip()
+    except KeyError as exc:
+        raise KeyError(f"Missing [ivolatility] api_key in {path}") from exc
+
+    if not api_key or api_key == "YOUR_API_KEY_HERE":
+        raise ValueError(f"Set a real IVolatility API key in {path}")
+    return api_key
+
+
 def fetch_options_data(symbol, start_date, end_date, dteFrom=0, dteTo=365, moneynessFrom=-50, moneynessTo=50):
-    api_key = "Z5xfNV1MfCPK35Z5"
+    api_key = load_ivolatility_api_key()
     ivol.setLoginParams(apiKey=api_key)
     fetch = ivol.setMethod("/equities/eod/stock-opts-by-param")
 

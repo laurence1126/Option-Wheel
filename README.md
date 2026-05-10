@@ -183,13 +183,26 @@ python grid_search.py
 
 `fetch_option_data.py` contains helpers for downloading option-chain data from IVolatility and saving it into the required monthly CSV layout:
 
+Create a local `.config` file first:
+
+```ini
+[ivolatility]
+api_key = YOUR_API_KEY_HERE
+```
+
+You can also set the key with an environment variable:
+
+```bash
+export IVOLATILITY_API_KEY="YOUR_API_KEY_HERE"
+```
+
 ```python
 from fetch_option_data import fetch_data_by_month
 
 fetch_data_by_month("QQQ", "2016-01-01", "2026-03-15")
 ```
 
-Before publishing this repository, make sure API credentials are not hardcoded in source files. Use an environment variable or local config file that is excluded from Git.
+The real `.config` file is ignored by Git. Use `.config.example` as the template.
 
 ## Notes And Assumptions
 
