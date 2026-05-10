@@ -194,7 +194,7 @@ class WheelBacktester:
             if open_leg is not None and not settled_today:
                 stop_check_price = self._option_price(open_leg, trade_ts.date(), spot, price_column="price_high")
                 stop_price = self._put_stop_loss_price(open_leg)
-                if open_leg.type == "put" and stop_price is not None and stop_check_price > stop_price:
+                if open_leg.type == "put" and stop_price is not None and stop_check_price >= stop_price:
                     stop_open_price = self._option_price(open_leg, trade_ts.date(), spot, price_column="price_open")
                     buyback_price = stop_price if stop_open_price < stop_price else stop_open_price
                     option_stop_loss_cash_flow_today = -buyback_price * self.config.shares_per_contract
