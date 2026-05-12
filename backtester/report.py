@@ -157,7 +157,7 @@ class WheelPerformanceReport:
             grouped[column] = grouped[column].map(self._fmt_decimal)
         return grouped
 
-    def plot_equity_and_drawdown(self) -> plt.Figure:
+    def plot_equity_and_drawdown(self, benchmark: bool = True) -> plt.Figure:
         drawdown = self._drawdown_series(self.equity_curve)
         underlying_drawdown = self._drawdown_series(self.underlying_curve)
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5), sharex=True)
@@ -166,7 +166,7 @@ class WheelPerformanceReport:
         drawdown_color = "#dc2626"
 
         ax1.plot(self.equity_curve.index, self.equity_curve.values, label="Strategy", color=strategy_color, linewidth=2.25)
-        if not self.underlying_curve.empty:
+        if benchmark and not self.underlying_curve.empty:
             ax1.plot(
                 self.underlying_curve.index,
                 self.underlying_curve.values,
@@ -184,7 +184,7 @@ class WheelPerformanceReport:
 
         ax2.fill_between(drawdown.index, drawdown.values, 0, color=drawdown_color, alpha=0.18, label="Strategy")
         ax2.plot(drawdown.index, drawdown.values, color=drawdown_color, linewidth=2)
-        if not underlying_drawdown.empty:
+        if benchmark and not underlying_drawdown.empty:
             ax2.plot(
                 underlying_drawdown.index,
                 underlying_drawdown.values,
@@ -204,28 +204,41 @@ class WheelPerformanceReport:
         plt.tight_layout()
         return fig
 
-    def plot_rolling_metrics(self, window: int = 63) -> plt.Figure:
+    def plot_rolling_metrics(self, window: int = 63, benchmark: bool = True) -> plt.Figure:
         if window < 2:
             raise ValueError("window must be at least 2 trading days.")
 
         rolling_metrics = self._rolling_metrics(window=window)
+        benchmark_metrics = self._rolling_metrics_from_returns(self.underlying_returns, window=window) if benchmark else pd.DataFrame()
         stats = self.summary_stats()
         full_period_volatility = self._annualized_volatility(self.returns)
         fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
         return_color = "#2563eb"
         volatility_color = "#d97706"
         sharpe_color = "#059669"
+        benchmark_color = "#334155"
         reference_color = "#475569"
         zero_line_color = "#94a3b8"
         grid_color = "#e2e8f0"
+        benchmark_label = f"{self.result.symbol} Buy & Hold"
 
         axes[0].plot(
             rolling_metrics.index,
             rolling_metrics["annualized_return"],
             color=return_color,
             linewidth=2.25,
-            label="Annualized Return",
+            label="Strategy",
         )
+        if not benchmark_metrics.empty:
+            axes[0].plot(
+                benchmark_metrics.index,
+                benchmark_metrics["annualized_return"],
+                color=benchmark_color,
+                linestyle="-.",
+                linewidth=1.8,
+                alpha=0.9,
+                label=benchmark_label,
+            )
         axes[0].axhline(0, color=zero_line_color, linewidth=1, alpha=0.8)
         if stats["cagr"] is not None and not pd.isna(stats["cagr"]):
             axes[0].axhline(
@@ -247,8 +260,18 @@ class WheelPerformanceReport:
             rolling_metrics["annualized_volatility"],
             color=volatility_color,
             linewidth=2.25,
-            label="Annualized Volatility",
+            label="Strategy",
         )
+        if not benchmark_metrics.empty:
+            axes[1].plot(
+                benchmark_metrics.index,
+                benchmark_metrics["annualized_volatility"],
+                color=benchmark_color,
+                linestyle="-.",
+                linewidth=1.8,
+                alpha=0.9,
+                label=benchmark_label,
+            )
         if full_period_volatility is not None and not pd.isna(full_period_volatility):
             axes[1].axhline(
                 full_period_volatility,
@@ -269,8 +292,18 @@ class WheelPerformanceReport:
             rolling_metrics["sharpe"],
             color=sharpe_color,
             linewidth=2.25,
-            label="Sharpe",
+            label="Strategy",
         )
+        if not benchmark_metrics.empty:
+            axes[2].plot(
+                benchmark_metrics.index,
+                benchmark_metrics["sharpe"],
+                color=benchmark_color,
+                linestyle="-.",
+                linewidth=1.8,
+                alpha=0.9,
+                label=benchmark_label,
+            )
         axes[2].axhline(0, color=zero_line_color, linewidth=1, alpha=0.8)
         if stats["sharpe"] is not None and not pd.isna(stats["sharpe"]):
             axes[2].axhline(
@@ -305,11 +338,15 @@ class WheelPerformanceReport:
         return spot_series / starting_spot * self.result.initial_cash
 
     def _rolling_metrics(self, window: int) -> pd.DataFrame:
-        returns = self.returns.dropna()
+        return self._rolling_metrics_from_returns(self.returns, window=window)
+
+    @staticmethod
+    def _rolling_metrics_from_returns(returns: pd.Series, window: int) -> pd.DataFrame:
+        returns = returns.dropna()
         if returns.empty:
             return pd.DataFrame(
                 columns=["annualized_return", "annualized_volatility", "sharpe"],
-                index=pd.DatetimeIndex([], name=self.equity_curve.index.name),
+                index=pd.DatetimeIndex([], name=returns.index.name),
             )
 
         annualized_return = returns.add(1.0).rolling(window).apply(np.prod, raw=True).pow(252.0 / window).sub(1.0)
