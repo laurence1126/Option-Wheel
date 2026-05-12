@@ -523,11 +523,7 @@ class WheelBacktester:
     @staticmethod
     def _entry_price(contract: pd.Series, price_column: str = "price") -> float:
         value = contract.get(price_column)
-        if pd.notna(value):
-            return float(value)
-
-        value = contract.get("price")
-        if pd.notna(value):
+        if pd.notna(value) and price_column != "price":
             return float(value)
 
         bid = contract.get("Bid")
