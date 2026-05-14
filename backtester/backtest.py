@@ -459,6 +459,7 @@ class WheelBacktester:
         if not trades_frame.empty:
             trades_frame["date"] = pd.to_datetime(trades_frame["date"])
             trades_frame["expiration"] = pd.to_datetime(trades_frame["expiration"])
+            trades_frame["expiration_weekday"] = trades_frame["expiration"].dt.day_name()
 
         events_frame = pd.DataFrame(events)
         events_frame["date"] = pd.to_datetime(events_frame["date"])

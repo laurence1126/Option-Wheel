@@ -98,6 +98,7 @@ report.summary_table()
 report.trade_breakdown_table()
 fig = report.plot_equity_and_drawdown(benchmark=True)
 rolling_fig = report.plot_rolling_metrics(window=63, benchmark=True)
+weekday_cash_flow_fig, weekday_cash_flow_table = report.plot_cash_flow_by_expiration_weekday()
 ```
 
 ## Strategy Parameters
@@ -124,7 +125,7 @@ rolling_fig = report.plot_rolling_metrics(window=63, benchmark=True)
 
 `run_wheel_backtest()` returns a `BacktestResult` with:
 
-- `trades`: completed option legs with outcome, premium, cash flow, days held, leverage ratio, and buyback price where applicable.
+- `trades`: completed option legs with outcome, premium, cash flow, expiration weekday, days held, leverage ratio, and buyback price where applicable.
 - `events`: start, sell, expiration, stop-loss, take-profit, liquidation, and final state events.
 - `daily_pnl`: daily portfolio accounting, including `raw_rf`, haircut-adjusted `rf`, and `cash_interest`.
 - `equity_curve`: strategy equity indexed by date.
@@ -161,6 +162,8 @@ take_profit
 - Average and maximum leverage ratio
 
 `WheelPerformanceReport.plot_rolling_metrics(window=63, benchmark=True)` plots rolling annualized return, annualized volatility, and Sharpe for the strategy and, optionally, the underlying buy-and-hold benchmark.
+
+`WheelPerformanceReport.plot_cash_flow_by_expiration_weekday()` plots premium collected, cut-loss impact, and net `cash_flow` grouped by option expiration weekday. It returns a table with `count`, `mean`, `sum`, `premium_collected`, and `cut_loss`.
 
 ## RF Cash Yield
 

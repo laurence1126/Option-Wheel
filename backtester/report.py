@@ -157,6 +157,76 @@ class WheelPerformanceReport:
             grouped[column] = grouped[column].map(self._fmt_decimal)
         return grouped
 
+    def plot_cash_flow_by_expiration_weekday(self) -> tuple[plt.Figure, pd.DataFrame]:
+        if self.trades.empty:
+            raise ValueError("No trades are available to plot.")
+        if "cash_flow" not in self.trades.columns:
+            raise ValueError("Trade table does not include cash_flow.")
+        if "premium" not in self.trades.columns:
+            raise ValueError("Trade table does not include premium.")
+
+        trades = self.trades.copy()
+        if "expiration_weekday" not in trades.columns:
+            if "expiration" not in trades.columns:
+                raise ValueError("Trade table does not include expiration or expiration_weekday.")
+            trades["expiration_weekday"] = pd.to_datetime(trades["expiration"]).dt.day_name()
+
+        weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        trades["premium_collected"] = trades["premium"].fillna(0.0)
+        trades["cut_loss"] = 0.0
+        if "outcome" in trades.columns:
+            cut_loss_mask = trades["outcome"] == "cut_loss"
+            trades.loc[cut_loss_mask, "cut_loss"] = (
+                trades.loc[cut_loss_mask, "cash_flow"].fillna(0.0) - trades.loc[cut_loss_mask, "premium_collected"]
+            )
+        cash_flow_summary = (
+            trades.groupby("expiration_weekday")
+            .agg(
+                count=("cash_flow", "count"),
+                mean=("cash_flow", "mean"),
+                sum=("cash_flow", "sum"),
+                premium_collected=("premium_collected", "sum"),
+                cut_loss=("cut_loss", "sum"),
+            )
+            .reindex(weekday_order)
+            .dropna(how="all")
+        )
+        if cash_flow_summary.empty:
+            raise ValueError("No cash_flow values are available by expiration weekday.")
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.bar(
+            cash_flow_summary.index,
+            cash_flow_summary["premium_collected"],
+            color="#059669",
+            alpha=0.88,
+            label="Premium Collected",
+        )
+        ax.bar(
+            cash_flow_summary.index,
+            cash_flow_summary["cut_loss"],
+            color="#dc2626",
+            alpha=0.82,
+            label="Cut Loss",
+        )
+        ax.plot(
+            cash_flow_summary.index,
+            cash_flow_summary["sum"],
+            color="#334155",
+            marker="o",
+            linewidth=1.8,
+            label="Net Cash Flow",
+        )
+        ax.axhline(0, color="#94a3b8", linewidth=1)
+        ax.set_title("Cash Flow by Option Expiration Weekday", fontsize=13, fontweight="bold")
+        ax.set_ylabel("Cash Flow ($)", fontsize=11)
+        ax.set_xlabel("Expiration Weekday", fontsize=11)
+        ax.grid(True, axis="y", color="#e2e8f0", linewidth=0.8)
+        ax.legend(fontsize=10)
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"${y:,.0f}"))
+        plt.tight_layout()
+        return fig, cash_flow_summary
+
     def plot_equity_and_drawdown(self, benchmark: bool = True) -> plt.Figure:
         drawdown = self._drawdown_series(self.equity_curve)
         underlying_drawdown = self._drawdown_series(self.underlying_curve)
