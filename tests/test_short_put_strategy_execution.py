@@ -1,0 +1,879 @@
+import unittest
+
+import pandas as pd
+from futu import MarketState, OrderStatus, SubType, TrdEnv, TrdSide
+
+from trading.config.trading_config import ShortPutLiveConfig
+from trading.trading_engine.order_execution import ExecutionResult, LimitOrderRequest, build_price_ladder
+from trading.strategies.short_put_strategy import ShortPutStrategy
+
+
+class FakeEngine:
+    def __init__(self) -> None:
+        self.trading_environment = TrdEnv.SIMULATE
+        self.margin_account = 100
+        self.option_account = 200
+        self.execution_call = None
+        self.execution_calls = []
+        self.execution_results = []
+        self.limit_order_execution_calls = []
+        self.limit_order_execution_results = []
+        self.order_list_result = pd.DataFrame()
+        self.order_list_results = []
+        self.open_position_result = pd.DataFrame()
+        self.market_state_result = pd.DataFrame([{"market_state": "AFTERNOON"}])
+        self.account_info_result = pd.DataFrame([{"cash": 100000.0, "fund_assets": 100000.0}])
+        self.stock_quote_result = pd.DataFrame()
+        self.top_order_book_result = {"code": "US.SPY", "bid_price": 722.95, "bid_volume": 1000, "ask_price": 723.05, "ask_volume": 1200}
+        self.subscriptions = []
+        self.time_triggers = []
+        self.telegram = FakeTelegram()
+
+    def execute_limit_ladder(self, request: LimitOrderRequest, order_wait_seconds: int, cancel_wait_seconds: int, fill_outside_rth: bool = True):
+        execution_call = {
+            "request": request,
+            "order_wait_seconds": order_wait_seconds,
+            "cancel_wait_seconds": cancel_wait_seconds,
+            "fill_outside_rth": fill_outside_rth,
+        }
+        self.execution_call = execution_call
+        self.execution_calls.append(execution_call)
+        if self.execution_results:
+            return self.execution_results.pop(0)
+        return ExecutionResult(
+            code=request.code,
+            target_qty=request.qty,
+            filled_qty=request.qty,
+            order_id="1",
+            execution_status="success",
+        )
+
+    def execute_limit_order(self, request: LimitOrderRequest, order_wait_seconds: int, fill_outside_rth: bool = False):
+        execution_call = {
+            "request": request,
+            "order_wait_seconds": order_wait_seconds,
+            "fill_outside_rth": fill_outside_rth,
+        }
+        self.limit_order_execution_calls.append(execution_call)
+        if self.limit_order_execution_results:
+            return self.limit_order_execution_results.pop(0)
+        return ExecutionResult(
+            code=request.code,
+            target_qty=request.qty,
+            filled_qty=request.qty,
+            order_id="underlying-sell-1",
+            execution_status="success",
+        )
+
+    def order_list_query(self, acc_id, order_id="", code="", status_filter_list=None, refresh_cache=True):
+        if self.order_list_results:
+            return self.order_list_results.pop(0)
+        return self.order_list_result
+
+    def get_open_position(self, acc_id, code="", refresh_cache=True):
+        return self.open_position_result
+
+    def subscribe(self, code_list, subtype_list, subscribe_push=True):
+        self.subscriptions.append(
+            {
+                "code_list": code_list,
+                "subtype_list": subtype_list,
+                "subscribe_push": subscribe_push,
+            }
+        )
+        return True
+
+    def unsubscribe_all(self):
+        return True
+
+    def get_stock_quote(self, code_list):
+        return self.stock_quote_result
+
+    def get_top_order_book(self, code):
+        return self.top_order_book_result
+
+    def get_market_state(self, code):
+        return self.market_state_result
+
+    def get_account_info(self, acc_id):
+        return self.account_info_result
+
+    def process_top_orderbook(self, data):
+        if not isinstance(data, dict):
+            return None
+
+        code = data.get("code")
+        bids = data.get("Bid")
+        asks = data.get("Ask")
+        if not code or not bids or not asks:
+            return None
+
+        bid_price = self._valid_positive_float(bids[0][0])
+        ask_price = self._valid_positive_float(asks[0][0])
+        bid_volume = self._valid_positive_float(bids[0][1])
+        ask_volume = self._valid_positive_float(asks[0][1])
+        if bid_price is None or ask_price is None or bid_volume is None or ask_volume is None or ask_price < bid_price:
+            return None
+        return {
+            "code": str(code),
+            "bid_price": bid_price,
+            "bid_volume": bid_volume,
+            "ask_price": ask_price,
+            "ask_volume": ask_volume,
+        }
+
+    def add_daily_time_trigger(self, name, trigger_time, timezone="America/New_York"):
+        self.time_triggers.append({"name": name, "trigger_time": trigger_time, "timezone": timezone})
+
+    @staticmethod
+    def _valid_positive_float(value):
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return None
+        if pd.isna(result) or result <= 0:
+            return None
+        return result
+
+
+class FakeTelegram:
+    def __init__(self) -> None:
+        self.approval_calls = []
+        self.approval_result = True
+        self.messages = []
+
+    def request_trade_approval(self, summary: str, timeout_seconds: int) -> bool:
+        self.approval_calls.append({"summary": summary, "timeout_seconds": timeout_seconds})
+        return self.approval_result
+
+    def send_message(self, text: str, reply_markup: dict | None = None, parse_mode: str | None = None) -> bool:
+        self.messages.append({"text": text, "reply_markup": reply_markup, "parse_mode": parse_mode})
+        return True
+
+
+class ShortPutStrategyExecutionTest(unittest.TestCase):
+    def make_strategy(self) -> tuple[ShortPutStrategy, FakeEngine]:
+        config = ShortPutLiveConfig(
+            max_contracts_per_trade=30,
+            max_order_book_participation=0.5,
+            price_ladder_steps=(0.0, 0.5, 1.0),
+            order_wait_seconds=7,
+            cancel_wait_seconds=9,
+        )
+        strategy = ShortPutStrategy(config)
+        engine = FakeEngine()
+        strategy.load_trading_engine(engine)
+        return strategy, engine
+
+    def selected_option(self) -> pd.Series:
+        return pd.Series(
+            {
+                "code": "US.SPY260527P723000",
+                "name": "SPY 260527 723P",
+                "volume": 1000,
+                "implied_volatility": 31.234,
+                "delta": -0.12345,
+                "bid_price": 2.26,
+                "ask_price": 2.40,
+                "bid_volume": 100,
+                "ask_volume": 120,
+                "price_spread": 0.01,
+            }
+        )
+
+    def short_put_position(self, qty=-12, average_cost=1.0) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "code": "US.SPY260527P723000",
+                    "stock_name": "SPY260527P723000",
+                    "qty": qty,
+                    "cost_price": average_cost,
+                }
+            ]
+        )
+
+    def quote_for_short_put(self, price_spread=0.01) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "code": "US.SPY260527P723000",
+                    "price_spread": price_spread,
+                }
+            ]
+        )
+
+    def orderbook(self, bid_price: float, ask_price: float, bid_volume: float = 10, ask_volume: float = 10) -> dict:
+        return {
+            "code": "US.SPY260527P723000",
+            "Bid": [(bid_price, bid_volume, 1)],
+            "Ask": [(ask_price, ask_volume, 1)],
+        }
+
+    def prepare_cut_loss_watch(self, strategy: ShortPutStrategy, engine: FakeEngine, average_cost=1.0) -> None:
+        strategy.config.telegram_approval["cut_loss"] = False
+        engine.open_position_result = self.short_put_position(average_cost=average_cost)
+        engine.stock_quote_result = self.quote_for_short_put()
+        strategy.setup_cut_loss_monitor()
+
+    def test_short_put_execution_checklist_returns_limit_order_request(self):
+        strategy, _ = self.make_strategy()
+
+        requests = strategy.short_put_execution_checklist(self.selected_option(), max_short=20)
+
+        self.assertIsNotNone(requests)
+        self.assertEqual(len(requests), 1)
+        request = requests[0]
+        self.assertEqual(request.acc_id, 200)
+        self.assertEqual(request.code, "US.SPY260527P723000")
+        self.assertEqual(request.side, TrdSide.SELL)
+        self.assertEqual(request.qty, 20)
+        self.assertEqual(request.price, [2.33, 2.26])
+        self.assertIsNone(request.remark)
+
+    def test_setup_time_triggers_adds_cut_loss_prepare_at_920(self):
+        strategy, engine = self.make_strategy()
+
+        strategy.setup_time_triggers()
+
+        trigger = next(item for item in engine.time_triggers if item["name"] == "setup_cut_loss_monitor")
+        self.assertEqual(str(trigger["trigger_time"]), "09:20:00")
+
+    def test_resolve_option_name_handles_simulate_compact_name(self):
+        strategy, _ = self.make_strategy()
+
+        option_info = strategy.resolve_option_name("SPY260527P723000", TrdEnv.SIMULATE)
+
+        self.assertIsNotNone(option_info)
+        self.assertEqual(option_info.ticker, "SPY")
+        self.assertEqual(option_info.type, "put")
+        self.assertEqual(option_info.strike, 723.0)
+        self.assertEqual(option_info.expiration, "2026-05-27")
+
+    def test_resolve_option_name_handles_real_spaced_name(self):
+        strategy, engine = self.make_strategy()
+        engine.trading_environment = TrdEnv.REAL
+
+        option_info = strategy.resolve_option_name("SPY 260527 723P")
+
+        self.assertIsNotNone(option_info)
+        self.assertEqual(option_info.ticker, "SPY")
+        self.assertEqual(option_info.type, "put")
+        self.assertEqual(option_info.strike, 723.0)
+        self.assertEqual(option_info.expiration, "2026-05-27")
+
+    def test_short_put_execution_checklist_limits_order_book_participation(self):
+        strategy, _ = self.make_strategy()
+        selected_option = self.selected_option()
+        selected_option["bid_volume"] = 10
+
+        requests = strategy.short_put_execution_checklist(selected_option, max_short=20)
+
+        self.assertIsNotNone(requests)
+        self.assertEqual([request.qty for request in requests], [5, 5, 5, 5])
+
+    def test_short_put_execution_checklist_splits_by_max_contracts_per_trade(self):
+        strategy, _ = self.make_strategy()
+
+        requests = strategy.short_put_execution_checklist(self.selected_option(), max_short=80)
+
+        self.assertIsNotNone(requests)
+        self.assertEqual([request.qty for request in requests], [30, 30, 20])
+        self.assertTrue(all(request.price == [2.33, 2.26] for request in requests))
+
+    def test_short_put_execution_checklist_splits_by_participation_cap(self):
+        strategy, _ = self.make_strategy()
+        strategy.config.max_contracts_per_trade = 100
+        selected_option = self.selected_option()
+        selected_option["bid_volume"] = 50
+
+        requests = strategy.short_put_execution_checklist(selected_option, max_short=80)
+
+        self.assertIsNotNone(requests)
+        self.assertEqual([request.qty for request in requests], [25, 25, 25, 5])
+
+    def test_short_put_execution_checklist_ignores_missing_max_contracts_cap(self):
+        strategy, _ = self.make_strategy()
+        strategy.config.max_contracts_per_trade = None
+
+        requests = strategy.short_put_execution_checklist(self.selected_option(), max_short=80)
+
+        self.assertIsNotNone(requests)
+        self.assertEqual([request.qty for request in requests], [50, 30])
+
+    def test_short_put_execution_checklist_uses_smaller_child_cap(self):
+        strategy, _ = self.make_strategy()
+        strategy.config.max_contracts_per_trade = 30
+        selected_option = self.selected_option()
+        selected_option["bid_volume"] = 120
+
+        requests = strategy.short_put_execution_checklist(selected_option, max_short=85)
+
+        self.assertIsNotNone(requests)
+        self.assertEqual([request.qty for request in requests], [30, 30, 25])
+
+    def test_short_put_execution_checklist_rejects_zero_participation_qty(self):
+        strategy, _ = self.make_strategy()
+        selected_option = self.selected_option()
+        selected_option["bid_volume"] = 1
+        strategy.config.max_order_book_participation = 0.4
+
+        requests = strategy.short_put_execution_checklist(selected_option, max_short=20)
+
+        self.assertIsNone(requests)
+
+    def test_short_put_execution_checklist_rejects_non_positive_max_short(self):
+        strategy, _ = self.make_strategy()
+
+        requests = strategy.short_put_execution_checklist(self.selected_option(), max_short=0)
+
+        self.assertIsNone(requests)
+
+    def test_buy_price_ladder_moves_from_mid_to_ask(self):
+        strategy, _ = self.make_strategy()
+
+        prices = build_price_ladder(
+            side="buy",
+            code="US.SPY260527P723000",
+            bid_price=2.26,
+            ask_price=2.40,
+            price_tick=0.01,
+            steps=strategy.config.price_ladder_steps,
+        )
+
+        self.assertEqual(prices, [2.33, 2.4])
+
+    def test_price_ladders_round_directionally_to_tick(self):
+        strategy, _ = self.make_strategy()
+
+        sell_prices = build_price_ladder(
+            side="sell",
+            code="US.TEST",
+            bid_price=1.01,
+            ask_price=1.04,
+            price_tick=0.02,
+            steps=strategy.config.price_ladder_steps,
+        )
+        buy_prices = build_price_ladder(
+            side="buy",
+            code="US.TEST",
+            bid_price=1.01,
+            ask_price=1.04,
+            price_tick=0.02,
+            steps=strategy.config.price_ladder_steps,
+        )
+
+        self.assertEqual(sell_prices, [1.02, 1.01])
+        self.assertEqual(buy_prices, [1.04])
+
+    def test_execute_short_put_strategy_delegates_execution_to_engine(self):
+        strategy, engine = self.make_strategy()
+        strategy.config.telegram_approval["short_put"] = True
+        strategy.pre_strategy_checklist = lambda: True
+        strategy.select_short_put = self.selected_option
+        strategy.get_max_num_to_short = lambda selected_option: 80
+
+        strategy.execute_short_put_strategy()
+
+        self.assertEqual(len(engine.execution_calls), 3)
+        requests = [execution_call["request"] for execution_call in engine.execution_calls]
+        self.assertEqual([request.qty for request in requests], [30, 30, 20])
+        self.assertTrue(all(request.code == "US.SPY260527P723000" for request in requests))
+        self.assertTrue(all(request.price == [2.33, 2.26] for request in requests))
+        self.assertTrue(all(execution_call["order_wait_seconds"] == 7 for execution_call in engine.execution_calls))
+        self.assertTrue(all(execution_call["cancel_wait_seconds"] == 9 for execution_call in engine.execution_calls))
+        self.assertEqual(len(engine.telegram.approval_calls), 1)
+        self.assertEqual(engine.telegram.approval_calls[0]["timeout_seconds"], strategy.config.telegram_approval_timeout)
+        self.assertIn("SHORT PUT SUMMARY", engine.telegram.approval_calls[0]["summary"])
+        self.assertIn("Name: SPY 723.00 Put (2026-05-27)", engine.telegram.approval_calls[0]["summary"])
+        self.assertIn("Implied Vol: 31.23%", engine.telegram.approval_calls[0]["summary"])
+        self.assertIn("Delta: -0.1235", engine.telegram.approval_calls[0]["summary"])
+        self.assertIn("Volume: 1000", engine.telegram.approval_calls[0]["summary"])
+        self.assertIn("TOB: 100 @ 2.26 | 2.40 @ 120", engine.telegram.approval_calls[0]["summary"])
+        self.assertIn("Total Quantity: <b>80</b>", engine.telegram.approval_calls[0]["summary"])
+
+    def test_prepare_cut_loss_monitor_subscribes_short_put_positions_with_push(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = self.short_put_position(qty=-12, average_cost=1.001)
+        engine.stock_quote_result = self.quote_for_short_put(price_spread=0.01)
+
+        strategy.setup_cut_loss_monitor()
+
+        self.assertEqual(len(engine.subscriptions), 1)
+        self.assertEqual(engine.subscriptions[0]["code_list"], ["US.SPY260527P723000"])
+        self.assertEqual(engine.subscriptions[0]["subtype_list"], [SubType.QUOTE, SubType.ORDER_BOOK])
+        self.assertTrue(engine.subscriptions[0]["subscribe_push"])
+        watch = strategy._cut_loss_watchlist["US.SPY260527P723000"]
+        self.assertEqual(watch.qty, 12)
+        self.assertEqual(watch.average_price, 1.001)
+        self.assertEqual(watch.stop_price, 1.51)
+
+    def test_resolve_option_code_formats_existing_option_position(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = self.short_put_position(qty=-12, average_cost=1.0)
+        strategy.update_put_position()
+
+        option_name = strategy.resolve_option_info(strategy._put_option_position[0])
+
+        self.assertEqual(option_name, "SPY 723.00 Put (2026-05-27)")
+
+    def test_prepare_cut_loss_monitor_ignores_when_stop_loss_disabled(self):
+        strategy, engine = self.make_strategy()
+        strategy.config.stop_loss_multiple = None
+        engine.open_position_result = self.short_put_position()
+
+        strategy.setup_cut_loss_monitor()
+
+        self.assertEqual(engine.subscriptions, [])
+        self.assertEqual(strategy._cut_loss_watchlist, {})
+
+    def test_cut_loss_orderbook_mid_signal_rounds_up_to_trigger(self):
+        strategy, engine = self.make_strategy()
+        self.prepare_cut_loss_watch(strategy, engine, average_cost=1.0)
+
+        strategy.on_orderbook(self.orderbook(bid_price=1.48, ask_price=1.51))
+
+        self.assertEqual(len(engine.execution_calls), 1)
+        request = engine.execution_calls[0]["request"]
+        self.assertEqual(request.side, TrdSide.BUY)
+        self.assertEqual(request.qty, 12)
+        self.assertEqual(request.price, [1.5, 1.51])
+        self.assertEqual(request.remark, "cut_loss")
+        self.assertEqual(engine.telegram.approval_calls, [])
+        self.assertEqual(len(engine.telegram.messages), 2)
+        self.assertIn("CUT LOSS SUMMARY", engine.telegram.messages[0]["text"])
+        self.assertTrue(engine.telegram.messages[0]["text"].endswith("Executing the above order..."))
+        self.assertEqual(engine.telegram.messages[0]["parse_mode"], "HTML")
+        self.assertIn("CUT LOSS RESULT", engine.telegram.messages[1]["text"])
+        self.assertIn("Target Mid: 1.50", engine.telegram.messages[1]["text"])
+        self.assertIn("Filled Quantity: <b>12</b>", engine.telegram.messages[1]["text"])
+        self.assertIsNone(engine.telegram.messages[1]["reply_markup"])
+        self.assertEqual(engine.telegram.messages[1]["parse_mode"], "HTML")
+
+    def test_cut_loss_orderbook_does_not_trigger_below_rounded_mid_signal(self):
+        strategy, engine = self.make_strategy()
+        self.prepare_cut_loss_watch(strategy, engine, average_cost=1.0)
+
+        strategy.on_orderbook(self.orderbook(bid_price=1.48, ask_price=1.50))
+
+        self.assertEqual(engine.execution_calls, [])
+
+    def test_cut_loss_uses_telegram_approval_setting(self):
+        strategy, engine = self.make_strategy()
+        self.prepare_cut_loss_watch(strategy, engine, average_cost=1.0)
+        strategy.config.telegram_approval["cut_loss"] = True
+        engine.telegram.approval_result = False
+
+        strategy.on_orderbook(self.orderbook(bid_price=1.48, ask_price=1.51))
+
+        self.assertEqual(len(engine.telegram.approval_calls), 1)
+        self.assertIn("CUT LOSS SUMMARY", engine.telegram.approval_calls[0]["summary"])
+        self.assertIn("TOB: 10 @ 1.48 | 1.51 @ 10", engine.telegram.approval_calls[0]["summary"])
+        self.assertEqual(engine.execution_calls, [])
+
+    def test_cut_loss_skips_when_open_order_exists_for_code(self):
+        strategy, engine = self.make_strategy()
+        self.prepare_cut_loss_watch(strategy, engine, average_cost=1.0)
+        engine.order_list_result = pd.DataFrame([{"order_id": "1"}])
+
+        strategy.on_orderbook(self.orderbook(bid_price=1.48, ask_price=1.51))
+
+        self.assertEqual(engine.execution_calls, [])
+
+    def test_cut_loss_ignores_duplicate_orderbook_while_executing(self):
+        strategy, engine = self.make_strategy()
+        self.prepare_cut_loss_watch(strategy, engine, average_cost=1.0)
+        calls = []
+
+        def execute_cut_loss(watch, order_book, mid_signal_price):
+            calls.append((watch.code, order_book["bid_price"], order_book["ask_price"], mid_signal_price))
+            strategy.on_orderbook(self.orderbook(bid_price=1.48, ask_price=1.51))
+
+        strategy.execute_cut_loss = execute_cut_loss
+
+        strategy.on_orderbook(self.orderbook(bid_price=1.48, ask_price=1.51))
+
+        self.assertEqual(len(calls), 1)
+
+    def test_cut_loss_failure_does_not_send_retry_keyboard(self):
+        strategy, engine = self.make_strategy()
+        self.prepare_cut_loss_watch(strategy, engine, average_cost=1.0)
+        engine.execution_results.append(
+            ExecutionResult(
+                code="US.SPY260527P723000",
+                target_qty=12,
+                filled_qty=0,
+                order_id="1",
+                execution_status="fail",
+                message="Price ladder exhausted without fill.",
+            )
+        )
+
+        strategy.on_orderbook(self.orderbook(bid_price=1.48, ask_price=1.51))
+
+        self.assertEqual(len(engine.telegram.messages), 2)
+        self.assertIn("CUT LOSS RESULT - FAILURE", engine.telegram.messages[1]["text"])
+        self.assertIsNone(engine.telegram.messages[1]["reply_markup"])
+
+    def test_execute_short_put_strategy_stops_after_failed_child_order(self):
+        strategy, engine = self.make_strategy()
+        strategy.pre_strategy_checklist = lambda: True
+        strategy.select_short_put = self.selected_option
+        strategy.get_max_num_to_short = lambda selected_option: 80
+        engine.execution_results.extend(
+            [
+                ExecutionResult(
+                    code="US.SPY260527P723000",
+                    target_qty=30,
+                    filled_qty=30,
+                    order_id="1",
+                    execution_status="success",
+                ),
+                ExecutionResult(
+                    code="US.SPY260527P723000",
+                    target_qty=30,
+                    filled_qty=5,
+                    order_id="2",
+                    execution_status="fail",
+                ),
+            ]
+        )
+
+        strategy.execute_short_put_strategy()
+
+        self.assertEqual(len(engine.execution_calls), 2)
+        self.assertEqual([execution_call["request"].qty for execution_call in engine.execution_calls], [30, 30])
+        self.assertEqual(len(engine.telegram.messages), 2)
+        self.assertIn("SHORT PUT RESULT - FAILURE", engine.telegram.messages[1]["text"])
+        reply_markup = engine.telegram.messages[1]["reply_markup"]
+        self.assertEqual(reply_markup["inline_keyboard"][0][0]["callback_data"], "strategy:short_put_spy:retry:execute_short_put_strategy")
+        self.assertEqual(reply_markup["inline_keyboard"][0][1]["callback_data"], "strategy:short_put_spy:cancel")
+
+    def test_execute_short_put_strategy_skips_execution_when_telegram_rejects(self):
+        strategy, engine = self.make_strategy()
+        strategy.config.telegram_approval["short_put"] = True
+        strategy.pre_strategy_checklist = lambda: True
+        strategy.select_short_put = self.selected_option
+        strategy.get_max_num_to_short = lambda selected_option: 80
+        strategy.short_put_execution_checklist = lambda selected_option, max_short: [
+            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=30, price=[2.33, 2.26]),
+            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=30, price=[2.33, 2.26]),
+            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=20, price=[2.33, 2.26]),
+        ]
+        engine.telegram.approval_result = False
+
+        strategy.execute_short_put_strategy()
+
+        self.assertEqual(len(engine.telegram.approval_calls), 1)
+        self.assertEqual(engine.execution_calls, [])
+
+    def test_execute_short_put_strategy_skips_approval_when_disabled(self):
+        strategy, engine = self.make_strategy()
+        strategy.config.telegram_approval["short_put"] = False
+        strategy.pre_strategy_checklist = lambda: True
+        strategy.select_short_put = self.selected_option
+        strategy.get_max_num_to_short = lambda selected_option: 80
+        strategy.short_put_execution_checklist = lambda selected_option, max_short: [
+            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=30, price=[2.33, 2.26]),
+            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=30, price=[2.33, 2.26]),
+            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=20, price=[2.33, 2.26]),
+        ]
+
+        strategy.execute_short_put_strategy()
+
+        self.assertEqual(engine.telegram.approval_calls, [])
+        self.assertEqual(len(engine.telegram.messages), 2)
+        self.assertIn("SHORT PUT SUMMARY", engine.telegram.messages[0]["text"])
+        self.assertTrue(engine.telegram.messages[0]["text"].endswith("Executing the above order..."))
+        self.assertEqual(engine.telegram.messages[0]["parse_mode"], "HTML")
+        self.assertIn("SHORT PUT RESULT", engine.telegram.messages[1]["text"])
+        self.assertIn("Target Mid: 2.33", engine.telegram.messages[1]["text"])
+        self.assertIn("Filled Quantity: <b>80</b>", engine.telegram.messages[1]["text"])
+        self.assertIsNone(engine.telegram.messages[1]["reply_markup"])
+        self.assertEqual(engine.telegram.messages[1]["parse_mode"], "HTML")
+        self.assertEqual(len(engine.execution_calls), 3)
+
+    def test_strategy_checklist_fails_when_open_order_query_errors(self):
+        strategy, engine = self.make_strategy()
+        engine.order_list_result = None
+
+        self.assertFalse(strategy.pre_strategy_checklist())
+
+    def test_strategy_checklist_fails_when_position_query_errors(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = None
+
+        self.assertFalse(strategy.pre_strategy_checklist())
+
+    def underlying_order_update(
+        self,
+        *,
+        order_id="assignment-1",
+        code="US.SPY",
+        side=TrdSide.BUY,
+        status=OrderStatus.FILLED_ALL,
+        qty=100,
+        price=723.0,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "order_id": order_id,
+                    "code": code,
+                    "trd_side": side,
+                    "order_status": status,
+                    "qty": qty,
+                    "price": price,
+                }
+            ]
+        )
+
+    def prepare_assignment_detector(self, strategy: ShortPutStrategy, engine: FakeEngine) -> None:
+        strategy._maturing_put_option_strike = [723.0]
+        engine.market_state_result = pd.DataFrame([{"market_state": MarketState.AFTER_HOURS_BEGIN}])
+
+    def test_on_order_underlying_sends_assignment_alert_for_matching_order(self):
+        strategy, engine = self.make_strategy()
+        self.prepare_assignment_detector(strategy, engine)
+
+        strategy.on_order_status(self.underlying_order_update())
+
+        self.assertEqual(len(engine.telegram.messages), 1)
+        telegram_message = engine.telegram.messages[0]
+        message = telegram_message["text"]
+        self.assertIn("POTENTIAL PUT ASSIGNMENT", message)
+        self.assertIn("Code: US.SPY", message)
+        self.assertIn("🫡 Liquidate this position?", message)
+        self.assertEqual(telegram_message["parse_mode"], "HTML")
+        buttons = telegram_message["reply_markup"]["inline_keyboard"][0]
+        liquidate_callback = buttons[0]["callback_data"]
+        cancel_callback = buttons[1]["callback_data"]
+        assignment_token = liquidate_callback.removeprefix(f"assignment:{strategy.strategy_id}:liquidate:")
+        self.assertEqual(
+            telegram_message["reply_markup"],
+            {
+                "inline_keyboard": [
+                    [
+                        {"text": "🚬 Liquidate", "callback_data": f"assignment:{strategy.strategy_id}:liquidate:{assignment_token}"},
+                        {"text": "❌ Cancel", "callback_data": f"assignment:{strategy.strategy_id}:cancel:{assignment_token}"},
+                    ]
+                ]
+            },
+        )
+        self.assertIn(assignment_token, strategy._pending_assignment_actions)
+        pending_action = strategy._pending_assignment_actions[assignment_token]
+        self.assertEqual(pending_action["order_id"], "assignment-1")
+        self.assertIn("expires_at", pending_action)
+        self.assertEqual(
+            pending_action["expires_at"] - pending_action["detected_at"], pd.Timedelta(seconds=strategy.config.assignment_action_timeout)
+        )
+        self.assertEqual(cancel_callback, f"assignment:{strategy.strategy_id}:cancel:{assignment_token}")
+
+    def test_on_order_underlying_deduplicates_same_order_id(self):
+        strategy, engine = self.make_strategy()
+        self.prepare_assignment_detector(strategy, engine)
+        data = self.underlying_order_update()
+
+        strategy.on_order_status(data)
+        strategy.on_order_status(data)
+
+        self.assertEqual(len(engine.telegram.messages), 1)
+
+    def test_on_order_underlying_rejects_non_matching_conditions(self):
+        cases = [
+            self.underlying_order_update(code="US.QQQ"),
+            self.underlying_order_update(side=TrdSide.SELL),
+            self.underlying_order_update(status=OrderStatus.SUBMITTED),
+            self.underlying_order_update(qty=50),
+            self.underlying_order_update(qty=150),
+            self.underlying_order_update(price=723.06),
+        ]
+
+        for data in cases:
+            strategy, engine = self.make_strategy()
+            self.prepare_assignment_detector(strategy, engine)
+
+            strategy.on_order_status(data)
+
+            self.assertEqual(engine.telegram.messages, [])
+
+    def test_on_order_underlying_rejects_wrong_market_state(self):
+        strategy, engine = self.make_strategy()
+        strategy._maturing_put_option_strike = [723.0]
+        engine.market_state_result = pd.DataFrame([{"market_state": MarketState.AFTERNOON}])
+
+        strategy.on_order_status(self.underlying_order_update())
+
+        self.assertEqual(engine.telegram.messages, [])
+
+    def test_on_order_underlying_rejects_missing_maturing_strikes(self):
+        strategy, engine = self.make_strategy()
+        engine.market_state_result = pd.DataFrame([{"market_state": MarketState.AFTER_HOURS_BEGIN}])
+
+        strategy.on_order_status(self.underlying_order_update())
+
+        self.assertEqual(engine.telegram.messages, [])
+
+    def test_on_order_underlying_skips_malformed_data_without_raising(self):
+        strategy, engine = self.make_strategy()
+        self.prepare_assignment_detector(strategy, engine)
+
+        strategy.on_order_status(pd.DataFrame([{"code": "US.SPY"}]))
+
+        self.assertEqual(engine.telegram.messages, [])
+
+    def test_execute_underlying_assignment_market_order_submits_aggressive_limit_sell(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = pd.DataFrame([{"code": "US.SPY", "qty": 200, "can_sell_qty": 200, "stock_name": "SPY", "cost_price": 723.0}])
+        engine.market_state_result = pd.DataFrame([{"market_state": MarketState.AFTER_HOURS_BEGIN}])
+        strategy._pending_assignment_actions["token-1"] = {"code": "US.SPY", "qty": 100}
+
+        strategy.execute_underlying_assignment("market_order", "token-1")
+
+        self.assertEqual(len(engine.limit_order_execution_calls), 1)
+        call = engine.limit_order_execution_calls[0]
+        request = call["request"]
+        self.assertEqual(request.code, "US.SPY")
+        self.assertEqual(request.side, TrdSide.SELL)
+        self.assertEqual(request.qty, 100)
+        self.assertEqual(request.price, 722.95)
+        self.assertEqual(request.remark, "assignment_market_order")
+        self.assertTrue(call["fill_outside_rth"])
+        self.assertEqual(call["order_wait_seconds"], strategy.config.order_wait_seconds)
+        self.assertEqual(engine.subscriptions[-1]["code_list"], ["US.SPY"])
+        self.assertIn(SubType.ORDER_BOOK, engine.subscriptions[-1]["subtype_list"])
+        self.assertFalse(engine.subscriptions[-1]["subscribe_push"])
+        self.assertIn("ASSIGNMENT LIQUIDATION RESULT", engine.telegram.messages[-1]["text"])
+        self.assertEqual(strategy._pending_assignment_actions["token-1"]["action_status"], "market_order_completed")
+
+    def test_execute_underlying_assignment_market_order_caps_qty_by_current_position(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = pd.DataFrame([{"code": "US.SPY", "qty": 100, "can_sell_qty": 50, "stock_name": "SPY", "cost_price": 723.0}])
+        engine.market_state_result = pd.DataFrame([{"market_state": MarketState.AFTER_HOURS_BEGIN}])
+        strategy._pending_assignment_actions["token-1"] = {"code": "US.SPY", "qty": 100}
+
+        strategy.execute_underlying_assignment("market_order", "token-1")
+
+        request = engine.limit_order_execution_calls[0]["request"]
+        self.assertEqual(request.qty, 50)
+
+    def test_execute_underlying_assignment_market_order_failure_is_retryable(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = pd.DataFrame([{"code": "US.SPY", "qty": 100, "can_sell_qty": 100, "stock_name": "SPY", "cost_price": 723.0}])
+        engine.limit_order_execution_results.append(
+            ExecutionResult(
+                code="US.SPY",
+                target_qty=100,
+                filled_qty=25,
+                order_id="underlying-sell-1",
+                execution_status="fail",
+            )
+        )
+        strategy._pending_assignment_actions["token-1"] = {"code": "US.SPY", "qty": 100}
+
+        strategy.execute_underlying_assignment("market_order", "token-1")
+
+        self.assertIn("ASSIGNMENT LIQUIDATION RESULT - FAILURE", engine.telegram.messages[-1]["text"])
+        reply_markup = engine.telegram.messages[-1]["reply_markup"]
+        self.assertEqual(reply_markup["inline_keyboard"][0][0]["callback_data"], "assignment:short_put_spy:market_order:token-1")
+        self.assertEqual(reply_markup["inline_keyboard"][0][1]["callback_data"], "assignment:short_put_spy:cancel:token-1")
+        self.assertEqual(strategy._pending_assignment_actions["token-1"]["action_status"], "market_order_failed")
+
+    def test_execute_underlying_assignment_market_order_blocks_when_open_orders_exist(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = pd.DataFrame([{"code": "US.SPY", "qty": 100, "can_sell_qty": 100, "stock_name": "SPY", "cost_price": 723.0}])
+        engine.order_list_result = pd.DataFrame([{"order_id": "open-1"}])
+        strategy._pending_assignment_actions["token-1"] = {"code": "US.SPY", "qty": 100}
+
+        strategy.execute_underlying_assignment("market_order", "token-1")
+
+        self.assertEqual(engine.limit_order_execution_calls, [])
+        self.assertIn("Open underlying orders already exist", engine.telegram.messages[-1]["text"])
+        self.assertEqual(strategy._pending_assignment_actions["token-1"]["action_status"], "market_order_failed")
+
+    def test_execute_underlying_assignment_market_order_requires_sellable_qty(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = pd.DataFrame([{"code": "US.SPY", "qty": 100, "stock_name": "SPY", "cost_price": 723.0}])
+        strategy._pending_assignment_actions["token-1"] = {"code": "US.SPY", "qty": 100}
+
+        strategy.execute_underlying_assignment("market_order", "token-1")
+
+        self.assertEqual(engine.limit_order_execution_calls, [])
+        self.assertIn("sellable quantity is unavailable", engine.telegram.messages[-1]["text"])
+        self.assertEqual(strategy._pending_assignment_actions["token-1"]["action_status"], "market_order_failed")
+
+    def test_execute_underlying_assignment_market_order_removes_expired_token_without_order(self):
+        strategy, engine = self.make_strategy()
+        strategy._pending_assignment_actions["token-1"] = {
+            "code": "US.SPY",
+            "qty": 100,
+            "expires_at": pd.Timestamp.now() - pd.Timedelta(seconds=1),
+        }
+
+        strategy.execute_underlying_assignment("market_order", "token-1")
+
+        self.assertEqual(engine.limit_order_execution_calls, [])
+        self.assertNotIn("token-1", strategy._pending_assignment_actions)
+
+    def test_execute_underlying_assignment_price_ladder_submits_sell_ladder(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = pd.DataFrame([{"code": "US.SPY", "qty": 100, "can_sell_qty": 100, "stock_name": "SPY", "cost_price": 723.0}])
+        engine.stock_quote_result = pd.DataFrame([{"code": "US.SPY", "price_spread": 0.01}])
+        strategy._pending_assignment_actions["token-1"] = {"code": "US.SPY", "qty": 100}
+
+        strategy.execute_underlying_assignment("price_ladder", "token-1")
+
+        self.assertEqual(len(engine.execution_calls), 1)
+        call = engine.execution_calls[0]
+        request = call["request"]
+        self.assertEqual(request.code, "US.SPY")
+        self.assertEqual(request.side, TrdSide.SELL)
+        self.assertEqual(request.qty, 100)
+        self.assertEqual(request.price, [723.0, 722.95])
+        self.assertEqual(request.remark, "assignment_price_ladder")
+        self.assertEqual(call["order_wait_seconds"], strategy.config.order_wait_seconds)
+        self.assertEqual(call["cancel_wait_seconds"], strategy.config.cancel_wait_seconds)
+        self.assertTrue(call["fill_outside_rth"])
+        self.assertEqual(engine.limit_order_execution_calls, [])
+        self.assertIn("ASSIGNMENT LIQUIDATION RESULT", engine.telegram.messages[-1]["text"])
+        self.assertEqual(strategy._pending_assignment_actions["token-1"]["action_status"], "price_ladder_completed")
+
+    def test_execute_underlying_assignment_price_ladder_failure_is_retryable(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = pd.DataFrame([{"code": "US.SPY", "qty": 100, "can_sell_qty": 100, "stock_name": "SPY", "cost_price": 723.0}])
+        engine.stock_quote_result = pd.DataFrame([{"code": "US.SPY", "price_spread": 0.01}])
+        engine.execution_results.append(
+            ExecutionResult(
+                code="US.SPY",
+                target_qty=100,
+                filled_qty=25,
+                order_id="1",
+                execution_status="fail",
+            )
+        )
+        strategy._pending_assignment_actions["token-1"] = {"code": "US.SPY", "qty": 100}
+
+        strategy.execute_underlying_assignment("price_ladder", "token-1")
+
+        self.assertIn("ASSIGNMENT LIQUIDATION RESULT - FAILURE", engine.telegram.messages[-1]["text"])
+        reply_markup = engine.telegram.messages[-1]["reply_markup"]
+        self.assertEqual(reply_markup["inline_keyboard"][0][0]["callback_data"], "assignment:short_put_spy:price_ladder:token-1")
+        self.assertEqual(reply_markup["inline_keyboard"][0][1]["callback_data"], "assignment:short_put_spy:cancel:token-1")
+        self.assertEqual(strategy._pending_assignment_actions["token-1"]["action_status"], "price_ladder_failed")
+
+    def test_execute_underlying_assignment_price_ladder_requires_price_tick(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = pd.DataFrame([{"code": "US.SPY", "qty": 100, "can_sell_qty": 100, "stock_name": "SPY", "cost_price": 723.0}])
+        engine.stock_quote_result = pd.DataFrame([{"code": "US.SPY"}])
+        strategy._pending_assignment_actions["token-1"] = {"code": "US.SPY", "qty": 100}
+
+        strategy.execute_underlying_assignment("price_ladder", "token-1")
+
+        self.assertEqual(engine.execution_calls, [])
+        self.assertEqual(engine.limit_order_execution_calls, [])
+        self.assertIn("price tick is unavailable", engine.telegram.messages[-1]["text"])
+        self.assertEqual(strategy._pending_assignment_actions["token-1"]["action_status"], "price_ladder_failed")
+
+
+if __name__ == "__main__":
+    unittest.main()

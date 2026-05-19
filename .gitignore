@@ -1,5 +1,7 @@
 __pycache__/
 .DS_Store
 .config
+.RSA_private_key
 .vscode/
 data/
+**/log
