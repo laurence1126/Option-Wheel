@@ -231,7 +231,6 @@ class ShortPutStrategy(TradingStrategyBase):
         with self.lock:
             if self._short_put_execution_active:
                 logger.warning("Short put execution skipped because another run is already active.")
-                self.engine.telegram.send_message("Short put execution skipped: another run is already active.")
                 return
             self._short_put_execution_active = True
 
@@ -337,13 +336,16 @@ class ShortPutStrategy(TradingStrategyBase):
 
     def setup_cut_loss_monitor(self) -> None:
         if self.config.stop_loss_multiple is None or self.config.stop_loss_multiple <= 0:
-            logger.info("Cut-loss monitor disabled because stop_loss_multiple=%s.", self.config.stop_loss_multiple)
+            logger.warning("Cut-loss monitor disabled because stop_loss_multiple=%s.", self.config.stop_loss_multiple)
             with self.lock:
                 self._cut_loss_watchlist = {}
+                self.trading_status["cut_loss_setup"] = False
             return
 
         if not self.update_put_position():
             logger.warning("Cut-loss monitor setup failed: unable to refresh put positions.")
+            with self.lock:
+                self.trading_status["cut_loss_setup"] = False
             return
 
         watchlist = self._build_cut_loss_watchlist()
@@ -351,24 +353,26 @@ class ShortPutStrategy(TradingStrategyBase):
             logger.info("Cut-loss monitor setup completed: no short put positions to monitor.")
             with self.lock:
                 self._cut_loss_watchlist = {}
+                self.trading_status["cut_loss_setup"] = True
             return
 
         codes = list(watchlist)
         if not self.engine.subscribe(codes, [SubType.QUOTE, SubType.ORDER_BOOK], subscribe_push=True):
             logger.warning("Cut-loss monitor setup failed: unable to subscribe short put positions.")
+            with self.lock:
+                self.trading_status["cut_loss_setup"] = False
             return
 
         self._populate_cut_loss_ticks(watchlist)
         with self.lock:
             self._cut_loss_watchlist = watchlist
+            self.trading_status["cut_loss_setup"] = True
 
         logger.info(
             "Cut-loss monitor setup completed: monitored_codes=%s, stop_prices=%s.",
             codes,
             {code: watch.stop_price for code, watch in watchlist.items()},
         )
-
-        self.trading_status["cut_loss_setup"] = True
 
     def execute_cut_loss(self, watch: CutLossWatch, order_book: dict[str, Any], mid_signal_price: float) -> None:
         if watch.price_tick is None or watch.stop_price is None:
@@ -1232,6 +1236,13 @@ class ShortPutStrategy(TradingStrategyBase):
     # Account / Risk / Position State Helpers
     ####################################################################################################
 
+    def get_underlying_market_state(self) -> object | None:
+        market_state = self.engine.get_market_state(self.config.underlying)
+        if market_state is None or market_state.empty or "market_state" not in market_state.columns:
+            logger.warning("Market state is unavailable for %s.", self.config.underlying)
+            return None
+        return market_state.iloc[0]["market_state"]
+
     def get_total_cash(self) -> float | None:
         account_info = self.engine.get_account_info(self.acc_id)
         if account_info is None or account_info.empty:
@@ -1317,13 +1328,6 @@ class ShortPutStrategy(TradingStrategyBase):
         )
         return max(0, max_num_to_short)
 
-    def get_underlying_market_state(self) -> object | None:
-        market_state = self.engine.get_market_state(self.config.underlying)
-        if market_state is None or market_state.empty or "market_state" not in market_state.columns:
-            logger.warning("Market state is unavailable for %s.", self.config.underlying)
-            return None
-        return market_state.iloc[0]["market_state"]
-
     def update_put_position(self) -> bool:
         position = self.engine.get_open_position(self.acc_id)
         if position is None:
@@ -1364,6 +1368,8 @@ class ShortPutStrategy(TradingStrategyBase):
 
     def update_maturing_put_strikes(self) -> bool:
         if not self.update_put_position():
+            with self.lock:
+                self.trading_status["maturing_updated"] = False
             return False
 
         today = pd.Timestamp.today().date()
@@ -1379,8 +1385,8 @@ class ShortPutStrategy(TradingStrategyBase):
 
         with self.lock:
             self._maturing_put_option_strike = maturing_strikes
+            self.trading_status["maturing_updated"] = True
 
-        self.trading_status["maturing_updated"] = True
         return True
 
     ####################################################################################################
