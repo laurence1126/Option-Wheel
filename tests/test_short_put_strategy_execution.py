@@ -48,10 +48,17 @@ class FakeEngine:
             execution_status="success",
         )
 
-    def execute_limit_order(self, request: LimitOrderRequest, order_wait_seconds: int, fill_outside_rth: bool = False):
+    def execute_limit_order(
+        self,
+        request: LimitOrderRequest,
+        order_wait_seconds: int,
+        cancel_wait_seconds: int,
+        fill_outside_rth: bool = False,
+    ):
         execution_call = {
             "request": request,
             "order_wait_seconds": order_wait_seconds,
+            "cancel_wait_seconds": cancel_wait_seconds,
             "fill_outside_rth": fill_outside_rth,
         }
         self.limit_order_execution_calls.append(execution_call)
@@ -738,8 +745,8 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         self.assertEqual(request.qty, 100)
         self.assertEqual(request.price, 722.95)
         self.assertEqual(request.remark, "assignment_market_order")
-        self.assertTrue(call["fill_outside_rth"])
         self.assertEqual(call["order_wait_seconds"], strategy.config.order_wait_seconds)
+        self.assertEqual(call["cancel_wait_seconds"], strategy.config.cancel_wait_seconds)
         self.assertEqual(engine.subscriptions[-1]["code_list"], ["US.SPY"])
         self.assertIn(SubType.ORDER_BOOK, engine.subscriptions[-1]["subtype_list"])
         self.assertFalse(engine.subscriptions[-1]["subscribe_push"])

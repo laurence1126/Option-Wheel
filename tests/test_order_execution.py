@@ -224,7 +224,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
         request.price = 1.0
         engine.place_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
 
-        result = service.execute_limit_order(request, order_wait_seconds=0, fill_outside_rth=True)
+        result = service.execute_limit_order(request, order_wait_seconds=0, cancel_wait_seconds=0, fill_outside_rth=True)
 
         self.assertEqual(result.execution_status, "success")
         self.assertEqual(result.order_id, "1")
@@ -237,7 +237,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
         engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
         engine.cancel_updates.append(order_update("1", OrderStatus.CANCELLED_ALL, 0))
 
-        result = service.execute_limit_order(request, order_wait_seconds=0)
+        result = service.execute_limit_order(request, order_wait_seconds=0, cancel_wait_seconds=0)
 
         self.assertEqual(engine.cancelled_orders, ["1"])
         self.assertEqual(result.execution_status, "fail")
@@ -251,7 +251,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
         engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 2))
         engine.cancel_updates.append(order_update("1", OrderStatus.CANCELLED_PART, 5))
 
-        result = service.execute_limit_order(request, order_wait_seconds=0)
+        result = service.execute_limit_order(request, order_wait_seconds=0, cancel_wait_seconds=0)
 
         self.assertEqual(engine.cancelled_orders, ["1"])
         self.assertEqual(result.execution_status, "fail")

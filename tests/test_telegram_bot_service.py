@@ -95,7 +95,7 @@ class TelegramBotServiceTest(unittest.TestCase):
             patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
             patch("trading.notification.telegram_bot.set_telegram_commands", return_value=True) as set_commands,
             patch("trading.notification.telegram_bot.set_telegram_commands_menu", return_value=True) as set_menu,
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=True),
+            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)),
             patch("trading.notification.telegram_bot.get_telegram_updates", return_value=[]),
             patch.dict("trading.notification.telegram_bot.os.environ", {}, clear=True),
         ):
@@ -107,7 +107,7 @@ class TelegramBotServiceTest(unittest.TestCase):
             self.assertIs(set_commands.call_args.args[0], config)
             self.assertEqual(
                 [command["command"] for command in set_commands.call_args.args[1]],
-                ["status", "shortput", "restart", "shutdown", "help", "start"],
+                ["status", "log", "shortput", "restart", "shutdown", "help", "start"],
             )
             set_menu.assert_called_once_with(config)
             service.shutdown()
@@ -124,7 +124,7 @@ class TelegramBotServiceTest(unittest.TestCase):
             patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
             patch("trading.notification.telegram_bot.set_telegram_commands", return_value=True),
             patch("trading.notification.telegram_bot.set_telegram_commands_menu", return_value=True),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=True) as send_message,
+            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
             patch("trading.notification.telegram_bot.get_telegram_updates", return_value=[]),
             patch.dict("trading.notification.telegram_bot.os.environ", {RESTART_ENV_VAR: "1"}, clear=True),
         ):
@@ -149,7 +149,7 @@ class TelegramBotServiceTest(unittest.TestCase):
             patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
             patch("trading.notification.telegram_bot.set_telegram_commands", return_value=True),
             patch("trading.notification.telegram_bot.set_telegram_commands_menu", return_value=True),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=True),
+            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)),
             patch("trading.notification.telegram_bot.get_telegram_updates", side_effect=get_updates) as get_updates_mock,
         ):
             service.start(FakeEngine())
@@ -175,7 +175,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
         service.engine = FakeEngine()
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=True) as send_message:
+        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
             service._handle_message({"chat": {"id": "999"}, "text": "/status"})
             service._handle_message({"chat": {"id": "123"}, "text": "/status"})
 
@@ -191,7 +191,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
         service.engine = FakeEngine()
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=True) as send_message:
+        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
             service._handle_message({"chat": {"id": "123"}, "text": "/shutdown"})
 
         self.assertFalse(service.engine._closed)
@@ -251,7 +251,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
         service.engine = FakeEngine()
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=True) as send_message:
+        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
             service._handle_message({"chat": {"id": "123"}, "text": "/restart"})
 
         self.assertFalse(service.engine._closed)
@@ -321,14 +321,14 @@ class TelegramBotServiceTest(unittest.TestCase):
 
         with (
             patch("trading.notification.telegram_bot.secrets.token_urlsafe", return_value="short-token"),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=True) as send_message,
+            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
         ):
             service._handle_message({"chat": {"id": "123"}, "text": "/shortput"})
 
         self.assertIn("short-token", service._pending_shortput_confirmations)
         send_message.assert_called_once()
         self.assertIs(send_message.call_args.args[0], service.config)
-        self.assertEqual(send_message.call_args.args[1], "Confirm short put strategy execution?")
+        self.assertEqual(send_message.call_args.args[1], "⚠️ Confirm short put strategy execution?")
         reply_markup = send_message.call_args.kwargs["reply_markup"]
         self.assertEqual(reply_markup["inline_keyboard"][0][0]["callback_data"], "shortput:confirm:short-token")
         self.assertEqual(reply_markup["inline_keyboard"][0][1]["callback_data"], "shortput:cancel:short-token")
@@ -339,7 +339,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
         service.engine = FakeEngine()
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=True) as send_message:
+        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
             service._handle_message({"chat": {"id": "999"}, "text": "/shortput"})
 
         send_message.assert_not_called()
