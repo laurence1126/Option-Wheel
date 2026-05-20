@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os, sys
 import threading
 from datetime import date
 from pathlib import Path
@@ -58,6 +59,16 @@ class DailyFileHandler(logging.FileHandler):
         super().emit(record)
 
 
+def _file_logging_disabled() -> bool:
+    disabled = os.getenv("TRADING_DISABLE_FILE_LOGGING", "").lower()
+    if disabled in {"1", "true", "yes", "on"}:
+        return True
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("PYTEST_VERSION"):
+        return True
+    argv = " ".join(sys.argv).lower()
+    return "unittest" in sys.modules and ("unittest" in argv or "discover" in sys.argv or "/tests/" in argv or "\\tests\\" in argv)
+
+
 def configure_logger(
     name: str,
     file_path: str | Path | None = None,
@@ -66,19 +77,30 @@ def configure_logger(
     daily_file: bool = True,
 ) -> logging.Logger:
     logger = logging.getLogger(name)
+    disable_file_logging = _file_logging_disabled()
+    if disable_file_logging:
+        for handler in list(logger.handlers):
+            if isinstance(handler, logging.FileHandler):
+                logger.removeHandler(handler)
+                handler.close()
     if not logger.handlers:
         handler = logging.StreamHandler()
         formatter = LevelFormatter(datefmt="%Y-%m-%d %H:%M:%S")
         handler.setFormatter(formatter)
         logger.addHandler(handler)
-    if file_path is not None and not any(isinstance(handler, logging.FileHandler) for handler in logger.handlers):
+    if not disable_file_logging and file_path is not None and not any(isinstance(handler, logging.FileHandler) for handler in logger.handlers):
         path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         handler = logging.FileHandler(path, mode="w" if override else "a")
         formatter = LevelFormatter(datefmt="%Y-%m-%d %H:%M:%S")
         handler.setFormatter(formatter)
         logger.addHandler(handler)
-    if file_path is None and daily_file and not any(isinstance(handler, logging.FileHandler) for handler in logger.handlers):
+    if (
+        not disable_file_logging
+        and file_path is None
+        and daily_file
+        and not any(isinstance(handler, logging.FileHandler) for handler in logger.handlers)
+    ):
         handler = DailyFileHandler(Path(__file__).resolve().parents[1] / "log", override=override)
         formatter = LevelFormatter(datefmt="%Y-%m-%d %H:%M:%S")
         handler.setFormatter(formatter)
