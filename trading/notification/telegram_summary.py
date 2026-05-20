@@ -11,17 +11,20 @@ def build_sell_put_summary(
     total_qty: int,
     child_qtys: list[int],
     prices: list[float],
+    to_maturity: int | None = None,
     final_line: str = "🫡 Approve this trade?",
 ) -> str:
     child_qty_text = " + ".join(str(qty) for qty in child_qtys)
     price_ladder_text = " -> ".join(_format_price(price) for price in prices)
     top_book_text = _format_top_order_book(snapshot)
+    maturity_text = "" if to_maturity is None else f"To Maturity: {html.escape(str(to_maturity))} Days\n"
     return (
         "<b>💸 SHORT PUT SUMMARY</b>\n"
         "\n"
         "<b>📜 Contract</b>\n"
         f"Code: {html.escape(str(code))}\n"
         f"Name: {html.escape(str(name))}\n"
+        f"{maturity_text}"
         "\n"
         "<b>📷 Snapshot</b>\n"
         f"Delta: {_format_decimal(snapshot.get('delta'))}\n"

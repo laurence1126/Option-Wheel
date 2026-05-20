@@ -260,6 +260,9 @@ class ShortPutStrategy(TradingStrategyBase):
             price_ladder = prices if isinstance(prices, list) else [prices]
             option_info = self.resolve_option_name(selected_option["name"], TrdEnv.REAL)
             option_name = self.resolve_option_info(option_info) if option_info is not None else selected_option["name"]
+            to_maturity = None
+            if option_info is not None and option_info.expiration is not None:
+                to_maturity = (pd.to_datetime(option_info.expiration).date() - pd.Timestamp.today().date()).days
             approval_summary = build_sell_put_summary(
                 code=selected_option["code"],
                 name=option_name,
@@ -267,6 +270,7 @@ class ShortPutStrategy(TradingStrategyBase):
                 total_qty=requested_qty,
                 child_qtys=[request.qty for request in requests],
                 prices=price_ladder,
+                to_maturity=to_maturity,
                 final_line="🫡 Approve this trade?" if requires_approval else "🛎️ Executing the above order...",
             )
             if requires_approval:

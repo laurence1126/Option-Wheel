@@ -1054,11 +1054,13 @@ class TelegramBotServiceTest(unittest.TestCase):
             total_qty=80,
             child_qtys=[30, 30, 20],
             prices=[2.33, 2.26],
+            to_maturity=8,
         )
 
         self.assertIn("<b>💸 SHORT PUT SUMMARY</b>", summary)
         self.assertIn("<b>📜 Contract</b>", summary)
         self.assertIn("Name: SPY &lt;test&gt;", summary)
+        self.assertIn("To Maturity: 8 Days", summary)
         self.assertIn("<b>📷 Snapshot</b>", summary)
         self.assertIn("Implied Vol: 31.23%", summary)
         self.assertIn("Delta: -0.1235", summary)
