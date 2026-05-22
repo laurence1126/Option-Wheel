@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import product
-import os
 from typing import Any
 
 import pandas as pd
@@ -86,21 +85,17 @@ def run_grid_search(
         )
     ]
 
-    worker_count = max_workers or os.cpu_count() or 1
+    worker_count = max_workers if max_workers is not None else 1
     if verbose:
         print(f"Starting grid search: {len(cases)} cases, max_workers={worker_count}")
         print(f"Symbol={symbol}, period={start_date} to {end_date}")
 
     rows: list[dict[str, Any]] = []
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_run_one_grid_case, case): case for case in cases}
-        completed = 0
-        for future in as_completed(futures):
-            case = futures[future]
-            completed += 1
+    if worker_count <= 1:
+        for completed, case in enumerate(cases, start=1):
             label = _case_label(case)
             try:
-                row = future.result()
+                row = _run_one_grid_case(case)
             except Exception as exc:
                 if verbose:
                     print(f"[{completed}/{len(cases)}] failed: {label} ({exc})")
@@ -123,6 +118,38 @@ def run_grid_search(
                 sharpe_text = "-" if pd.isna(sharpe) else f"{sharpe:.3f}"
                 equity_text = "-" if pd.isna(ending_equity) else f"{ending_equity:,.2f}"
                 print(f"[{completed}/{len(cases)}] done: {label}, sharpe={sharpe_text}, ending_equity={equity_text}")
+    else:
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            futures = {executor.submit(_run_one_grid_case, case): case for case in cases}
+            completed = 0
+            for future in as_completed(futures):
+                case = futures[future]
+                completed += 1
+                label = _case_label(case)
+                try:
+                    row = future.result()
+                except Exception as exc:
+                    if verbose:
+                        print(f"[{completed}/{len(cases)}] failed: {label} ({exc})")
+                    rows.append(
+                        {
+                            "case": label,
+                            "target_delta": case["target_delta"],
+                            "stop_loss_multiple": case["stop_loss_multiple"],
+                            "put_exp_days": case["put_exp_days"],
+                            "put_day_of_week": case["put_day_of_week"],
+                            "error": str(exc),
+                        }
+                    )
+                    continue
+
+                rows.append(row)
+                if verbose:
+                    sharpe = row.get("sharpe")
+                    ending_equity = row.get("ending_equity")
+                    sharpe_text = "-" if pd.isna(sharpe) else f"{sharpe:.3f}"
+                    equity_text = "-" if pd.isna(ending_equity) else f"{ending_equity:,.2f}"
+                    print(f"[{completed}/{len(cases)}] done: {label}, sharpe={sharpe_text}, ending_equity={equity_text}")
 
     results = pd.DataFrame(rows)
     if sort_by in results.columns:
