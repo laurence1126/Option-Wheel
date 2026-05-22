@@ -21,13 +21,17 @@ def _run_one_grid_case(params: dict[str, Any]) -> dict[str, Any]:
             "target_delta": params["target_delta"],
             "stop_loss_multiple": params["stop_loss_multiple"],
             "put_exp_days": params["put_exp_days"],
+            "put_day_of_week": params["put_day_of_week"],
         }
     )
     return stats
 
 
 def _case_label(params: dict[str, Any]) -> str:
-    return f"delta={params['target_delta']}, " f"stop={params['stop_loss_multiple']}, " f"put_dte={params['put_exp_days']}"
+    label = f"delta={params['target_delta']}, " f"stop={params['stop_loss_multiple']}, " f"put_dte={params['put_exp_days']}"
+    if params.get("put_day_of_week") is not None:
+        label += f", put_dow={params['put_day_of_week']}"
+    return label
 
 
 def run_grid_search(
@@ -37,6 +41,7 @@ def run_grid_search(
     target_delta_values: list[float] | None = None,
     stop_loss_multiple_values: list[float | None] | None = None,
     put_exp_days_values: list[int] | None = None,
+    put_day_of_week: list[int] | None = None,
     call_exp_days: int = 0,
     initial_cash: float = 10_000.0,
     leverage: float = 2.0,
@@ -64,6 +69,7 @@ def run_grid_search(
             "stop_loss_multiple": stop_loss_multiple,
             "take_profit_multiple": take_profit_multiple,
             "put_exp_days": put_exp_days,
+            "put_day_of_week": put_day_of_week,
             "call_exp_days": call_exp_days,
             "initial_cash": initial_cash,
             "leverage": leverage,
@@ -104,6 +110,7 @@ def run_grid_search(
                         "target_delta": case["target_delta"],
                         "stop_loss_multiple": case["stop_loss_multiple"],
                         "put_exp_days": case["put_exp_days"],
+                        "put_day_of_week": case["put_day_of_week"],
                         "error": str(exc),
                     }
                 )

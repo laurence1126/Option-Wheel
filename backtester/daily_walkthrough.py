@@ -214,6 +214,7 @@ def run_daily_walkthrough(
     stop_loss_multiple: float | None = 3.0,
     take_profit_multiple: float | None = None,
     put_exp_days: int = 25,
+    put_day_of_week: list[int] | None = None,
 ) -> DailyWalkthroughResult:
     config = WheelConfig(
         symbol=symbol,
@@ -229,6 +230,7 @@ def run_daily_walkthrough(
         stop_loss_multiple=stop_loss_multiple,
         take_profit_multiple=take_profit_multiple,
         put_exp_days=put_exp_days,
+        put_day_of_week=put_day_of_week,
         call_exp_days=0,
         data_root="data",
     )

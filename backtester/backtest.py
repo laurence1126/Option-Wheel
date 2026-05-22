@@ -25,6 +25,7 @@ class WheelConfig:
     stop_loss_multiple: float | None = 3.0
     take_profit_multiple: float | None = None
     put_exp_days: int = 25
+    put_day_of_week: list[int] | None = None
     call_exp_days: int = 25
     shares_per_contract: int = 100
     data_root: str = "data"
@@ -490,6 +491,9 @@ class WheelBacktester:
             & (chain["dte"] >= self.config.put_exp_days)
             & ((chain["price_strike"] * self.config.shares_per_contract) <= available_cash)
         ].copy()
+        if self.config.put_day_of_week is not None:
+            allowed_days = self._validated_put_day_of_week()
+            candidates = candidates.loc[pd.to_datetime(candidates["expiration_date"]).dt.dayofweek.isin(allowed_days)].copy()
         if candidates.empty:
             return None
 
@@ -568,6 +572,24 @@ class WheelBacktester:
             return None
         return leg.premium * multiple
 
+    def _validated_put_day_of_week(self) -> set[int]:
+        values = self.config.put_day_of_week
+        if values is None:
+            return set()
+        allowed_days: set[int] = set()
+        for value in values:
+            try:
+                day = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("put_day_of_week values must be integers from 0 (Monday) through 4 (Friday).") from exc
+            if isinstance(value, bool) or day != value:
+                raise ValueError("put_day_of_week values must be integers from 0 (Monday) through 4 (Friday).")
+            allowed_days.add(day)
+        invalid_days = sorted(day for day in allowed_days if day < 0 or day > 4)
+        if invalid_days:
+            raise ValueError("put_day_of_week values must be integers from 0 (Monday) through 4 (Friday).")
+        return allowed_days
+
     def _leverage_ratio(self, strike: float, cash: float, shares: int, spot: float, option_position: float) -> float | None:
         equity = cash + shares * spot + option_position
         if equity <= 0:
@@ -620,6 +642,7 @@ def run_wheel_backtest(
     stop_loss_multiple: float | None = 3.0,
     take_profit_multiple: float | None = None,
     put_exp_days: int = 25,
+    put_day_of_week: list[int] | None = None,
     call_exp_days: int = 25,
     initial_cash: float = 100_000.0,
     leverage: float = 1.0,
@@ -643,6 +666,7 @@ def run_wheel_backtest(
         stop_loss_multiple=stop_loss_multiple,
         take_profit_multiple=take_profit_multiple,
         put_exp_days=put_exp_days,
+        put_day_of_week=put_day_of_week,
         call_exp_days=call_exp_days,
         data_root=data_root,
     )
