@@ -11,7 +11,7 @@ def main() -> None:
         put_day_of_week=[2, 4],
         initial_cash=7_500,
         leverage=10,
-        max_workers=7,
+        max_workers=5,
     )
 
     grid_results_qqq = run_grid_search(
@@ -21,7 +21,7 @@ def main() -> None:
         put_day_of_week=[2, 4],
         initial_cash=5_000,
         leverage=10,
-        max_workers=7,
+        max_workers=5,
     )
 
     data_dir = Path("data/grid_search")
