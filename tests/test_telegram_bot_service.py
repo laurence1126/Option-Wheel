@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from trading.notification.telegram_bot import RESTART_ENV_VAR, TelegramBotService
+from trading.notification.telegram_bot import PendingShortPut, RESTART_ENV_VAR, TelegramBotService
 from trading.notification.telegram_consts import BOT_COMMANDS, HELP_TEXT
 from trading.notification.telegram_summary import (
     build_assignment_summary,
@@ -78,6 +78,20 @@ class FakeExecutionResult:
 class TelegramBotServiceTest(unittest.TestCase):
     def make_service(self) -> TelegramBotService:
         return TelegramBotService(config_path=".test_config", poll_timeout_seconds=0, error_backoff_seconds=0)
+
+    def add_pending_shortput(
+        self,
+        service: TelegramBotService,
+        token: str = "short-token",
+        strategy_ids: list[str] | None = None,
+        selected_strategy_id: str | None = "short_put",
+        seconds: int = 60,
+    ) -> None:
+        service._pending_shortput_confirmations[token] = PendingShortPut(
+            expires_at=pd.Timestamp.now() + pd.Timedelta(seconds=seconds),
+            strategy_ids=strategy_ids or ["short_put"],
+            selected_strategy_id=selected_strategy_id,
+        )
 
     def wait_for_pending_approval(self, service: TelegramBotService, approval_id: str) -> None:
         deadline = time.time() + 1
@@ -328,7 +342,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.assertIn("short-token", service._pending_shortput_confirmations)
         send_message.assert_called_once()
         self.assertIs(send_message.call_args.args[0], service.config)
-        self.assertEqual(send_message.call_args.args[1], "⚠️ Confirm short put strategy execution?")
+        self.assertEqual(send_message.call_args.args[1], "⚠️ Confirm short put strategy execution?\nStrategy ID: short_put")
         reply_markup = send_message.call_args.kwargs["reply_markup"]
         self.assertEqual(reply_markup["inline_keyboard"][0][0]["callback_data"], "shortput:confirm:short-token")
         self.assertEqual(reply_markup["inline_keyboard"][0][1]["callback_data"], "shortput:cancel:short-token")
@@ -345,12 +359,25 @@ class TelegramBotServiceTest(unittest.TestCase):
         send_message.assert_not_called()
         self.assertEqual(service._pending_shortput_confirmations, {})
 
+    def test_shortput_command_rejects_missing_strategy_action_without_pending_confirmation(self):
+        service = self.make_service()
+        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.enabled = True
+        service.engine = FakeEngine()
+        service.engine.strategy = {"short_put": object()}
+
+        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service._handle_message({"chat": {"id": "123"}, "text": "/shortput"})
+
+        self.assertEqual(service._pending_shortput_confirmations, {})
+        send_message.assert_called_once_with(service.config, "Short put strategy unavailable.")
+
     def test_shortput_cancel_callback_does_not_execute(self):
         service = self.make_service()
         service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
         service.enabled = True
         service.engine = FakeEngine()
-        service._pending_shortput_confirmations["short-token"] = pd.Timestamp.now() + pd.Timedelta(seconds=60)
+        self.add_pending_shortput(service)
 
         with (
             patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
@@ -377,7 +404,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
         service.enabled = True
         service.engine = FakeEngine()
-        service._pending_shortput_confirmations["short-token"] = pd.Timestamp.now() + pd.Timedelta(seconds=60)
+        self.add_pending_shortput(service)
         started_threads = []
 
         class ImmediateThread:
@@ -419,7 +446,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
         service.enabled = True
         service.engine = FakeEngine()
-        service._pending_shortput_confirmations["short-token"] = pd.Timestamp.now() - pd.Timedelta(seconds=1)
+        self.add_pending_shortput(service, seconds=-1)
 
         with (
             patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
@@ -447,7 +474,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
         service.engine = FakeEngine()
         service._shortput_running = True
-        service._pending_shortput_confirmations["short-token"] = pd.Timestamp.now() + pd.Timedelta(seconds=60)
+        self.add_pending_shortput(service)
 
         with (
             patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
@@ -473,32 +500,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
         service.enabled = True
         service.engine = None
-        service._pending_shortput_confirmations["short-token"] = pd.Timestamp.now() + pd.Timedelta(seconds=60)
-
-        with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as shortput_thread,
-        ):
-            service._handle_callback_query(
-                {
-                    "id": "callback-1",
-                    "data": "shortput:confirm:short-token",
-                    "message": {"message_id": 10, "chat": {"id": "123"}},
-                }
-            )
-
-        answer.assert_called_once_with(service.config, "callback-1", "Trading engine unavailable.")
-        self.assertEqual(edit_message.call_args.kwargs["text"], "Trading engine unavailable.")
-        shortput_thread.assert_not_called()
-
-    def test_shortput_confirm_rejects_missing_strategy_action(self):
-        service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
-        service.enabled = True
-        service.engine = FakeEngine()
-        service.engine.strategy = {"short_put": object()}
-        service._pending_shortput_confirmations["short-token"] = pd.Timestamp.now() + pd.Timedelta(seconds=60)
+        self.add_pending_shortput(service)
 
         with (
             patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
@@ -517,13 +519,13 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.assertEqual(edit_message.call_args.kwargs["text"], "Short put strategy unavailable.")
         shortput_thread.assert_not_called()
 
-    def test_shortput_confirm_rejects_multiple_matching_strategies(self):
+    def test_shortput_confirm_rejects_missing_strategy_action(self):
         service = self.make_service()
         service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
         service.enabled = True
         service.engine = FakeEngine()
-        service.engine.strategy["second_short_put"] = FakeStrategy()
-        service._pending_shortput_confirmations["short-token"] = pd.Timestamp.now() + pd.Timedelta(seconds=60)
+        service.engine.strategy = {"short_put": object()}
+        self.add_pending_shortput(service)
 
         with (
             patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
@@ -538,8 +540,165 @@ class TelegramBotServiceTest(unittest.TestCase):
                 }
             )
 
-        answer.assert_called_once_with(service.config, "callback-1", "Multiple short put strategies are registered.")
-        self.assertEqual(edit_message.call_args.kwargs["text"], "Multiple short put strategies are registered.")
+        answer.assert_called_once_with(service.config, "callback-1", "Short put strategy unavailable.")
+        self.assertEqual(edit_message.call_args.kwargs["text"], "Short put strategy unavailable.")
+        shortput_thread.assert_not_called()
+
+    def test_shortput_command_sends_strategy_selection_when_multiple_match(self):
+        service = self.make_service()
+        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.enabled = True
+        service.engine = FakeEngine()
+        service.engine.strategy["second_short_put"] = FakeStrategy()
+
+        with (
+            patch("trading.notification.telegram_bot.secrets.token_urlsafe", return_value="short-token"),
+            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
+        ):
+            service._handle_message({"chat": {"id": "123"}, "text": "/shortput"})
+
+        pending = service._pending_shortput_confirmations["short-token"]
+        self.assertEqual(pending.strategy_ids, ["short_put", "second_short_put"])
+        self.assertIsNone(pending.selected_strategy_id)
+        send_message.assert_called_once()
+        self.assertEqual(send_message.call_args.args[1], "Which strategy ID would you want to execute short put?")
+        reply_markup = send_message.call_args.kwargs["reply_markup"]
+        self.assertEqual(reply_markup["inline_keyboard"][0][0]["text"], "short_put")
+        self.assertEqual(reply_markup["inline_keyboard"][0][0]["callback_data"], "shortput:select:short-token:0")
+        self.assertEqual(reply_markup["inline_keyboard"][1][0]["text"], "second_short_put")
+        self.assertEqual(reply_markup["inline_keyboard"][1][0]["callback_data"], "shortput:select:short-token:1")
+        self.assertEqual(reply_markup["inline_keyboard"][2][0]["callback_data"], "shortput:cancel:short-token")
+
+    def test_shortput_select_edits_message_to_confirm_selected_strategy(self):
+        service = self.make_service()
+        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.enabled = True
+        service.engine = FakeEngine()
+        service.engine.strategy["second_short_put"] = FakeStrategy()
+        self.add_pending_shortput(service, strategy_ids=["short_put", "second_short_put"], selected_strategy_id=None)
+
+        with (
+            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+        ):
+            service._handle_callback_query(
+                {
+                    "id": "callback-1",
+                    "data": "shortput:select:short-token:1",
+                    "message": {"message_id": 10, "chat": {"id": "123"}},
+                }
+            )
+
+        self.assertEqual(service._pending_shortput_confirmations["short-token"].selected_strategy_id, "second_short_put")
+        answer.assert_called_once_with(service.config, "callback-1", "Short put strategy selected")
+        self.assertEqual(edit_message.call_args.kwargs["text"], "⚠️ Confirm short put strategy execution?\nStrategy ID: second_short_put")
+        reply_markup = edit_message.call_args.kwargs["reply_markup"]
+        self.assertEqual(reply_markup["inline_keyboard"][0][0]["callback_data"], "shortput:confirm:short-token")
+        self.assertEqual(reply_markup["inline_keyboard"][0][1]["callback_data"], "shortput:cancel:short-token")
+
+    def test_shortput_confirm_after_selection_starts_selected_strategy_only(self):
+        service = self.make_service()
+        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.enabled = True
+        service.engine = FakeEngine()
+        service.engine.strategy["second_short_put"] = FakeStrategy()
+        self.add_pending_shortput(
+            service,
+            strategy_ids=["short_put", "second_short_put"],
+            selected_strategy_id="second_short_put",
+        )
+        started_threads = []
+
+        class ImmediateThread:
+            def __init__(self, target, args=(), name=None, daemon=None):
+                self.target = target
+                self.args = args
+                self.name = name
+                self.daemon = daemon
+                started_threads.append(self)
+
+            def start(self):
+                self.target(*self.args)
+
+        with (
+            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_bot.threading.Thread", ImmediateThread),
+        ):
+            service._handle_callback_query(
+                {
+                    "id": "callback-1",
+                    "data": "shortput:confirm:short-token",
+                    "message": {"message_id": 10, "chat": {"id": "123"}},
+                }
+            )
+
+        self.assertEqual(service.engine.strategy["short_put"].execute_short_put_calls, 0)
+        self.assertEqual(service.engine.strategy["second_short_put"].execute_short_put_calls, 1)
+        self.assertEqual(started_threads[0].name, "second_short_put-shortput-command")
+        answer.assert_called_once_with(service.config, "callback-1", "Short put confirmed")
+        self.assertEqual(edit_message.call_args.kwargs["text"], "Short put execution confirmed. Starting now...")
+
+    def test_shortput_expired_select_does_not_execute(self):
+        service = self.make_service()
+        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.enabled = True
+        service.engine = FakeEngine()
+        service.engine.strategy["second_short_put"] = FakeStrategy()
+        self.add_pending_shortput(
+            service,
+            strategy_ids=["short_put", "second_short_put"],
+            selected_strategy_id=None,
+            seconds=-1,
+        )
+
+        with (
+            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_bot.threading.Thread") as shortput_thread,
+        ):
+            service._handle_callback_query(
+                {
+                    "id": "callback-1",
+                    "data": "shortput:select:short-token:1",
+                    "message": {"message_id": 10, "chat": {"id": "123"}},
+                }
+            )
+
+        self.assertEqual(service._pending_shortput_confirmations, {})
+        self.assertEqual(service.engine.strategy["short_put"].execute_short_put_calls, 0)
+        self.assertEqual(service.engine.strategy["second_short_put"].execute_short_put_calls, 0)
+        answer.assert_called_once_with(service.config, "callback-1", "Short put confirmation expired")
+        self.assertEqual(edit_message.call_args.kwargs["text"], "Short put confirmation expired.")
+        shortput_thread.assert_not_called()
+
+    def test_shortput_confirm_rejects_selected_strategy_missing_after_selection(self):
+        service = self.make_service()
+        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.enabled = True
+        service.engine = FakeEngine()
+        self.add_pending_shortput(
+            service,
+            strategy_ids=["short_put", "second_short_put"],
+            selected_strategy_id="second_short_put",
+        )
+
+        with (
+            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_bot.threading.Thread") as shortput_thread,
+        ):
+            service._handle_callback_query(
+                {
+                    "id": "callback-1",
+                    "data": "shortput:confirm:short-token",
+                    "message": {"message_id": 10, "chat": {"id": "123"}},
+                }
+            )
+
+        answer.assert_called_once_with(service.config, "callback-1", "Short put strategy unavailable.")
+        self.assertEqual(edit_message.call_args.kwargs["text"], "Short put strategy unavailable.")
+        self.assertFalse(service._shortput_running)
         shortput_thread.assert_not_called()
 
     def test_short_put_retry_callback_removes_keyboard_and_retries_in_thread(self):

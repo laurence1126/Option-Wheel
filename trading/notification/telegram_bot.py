@@ -47,6 +47,13 @@ class PendingApproval:
     result: bool | None = None
 
 
+@dataclass
+class PendingShortPut:
+    expires_at: pd.Timestamp
+    strategy_ids: list[str]
+    selected_strategy_id: str | None = None
+
+
 class TelegramBotService:
     def __init__(
         self,
@@ -68,7 +75,7 @@ class TelegramBotService:
         self._shutdown_event = threading.Event()
         self._poll_thread: threading.Thread | None = None
         self._pending_approvals: dict[str, PendingApproval] = {}
-        self._pending_shortput_confirmations: dict[str, pd.Timestamp] = {}
+        self._pending_shortput_confirmations: dict[str, PendingShortPut] = {}
         self._lock = threading.RLock()
 
     ####################################################################################################
@@ -246,6 +253,8 @@ class TelegramBotService:
             self._cancel_restart(callback_query_id, chat_id, message_id)
         elif data.startswith("shortput:confirm:"):
             self._confirm_shortput(data.removeprefix("shortput:confirm:"), callback_query_id, chat_id, message_id)
+        elif data.startswith("shortput:select:"):
+            self._select_shortput(data.removeprefix("shortput:select:"), callback_query_id, chat_id, message_id)
         elif data.startswith("shortput:cancel:"):
             self._cancel_shortput(data.removeprefix("shortput:cancel:"), callback_query_id, chat_id, message_id)
         elif data.startswith("strategy:"):
@@ -487,8 +496,8 @@ class TelegramBotService:
         reply_markup = {
             "inline_keyboard": [
                 [
-                    {"text": "Confirm", "callback_data": "shutdown:confirm"},
-                    {"text": "Cancel", "callback_data": "shutdown:cancel"},
+                    {"text": "✅ Confirm", "callback_data": "shutdown:confirm"},
+                    {"text": "❌ Cancel", "callback_data": "shutdown:cancel"},
                 ]
             ]
         }
@@ -514,8 +523,8 @@ class TelegramBotService:
         reply_markup = {
             "inline_keyboard": [
                 [
-                    {"text": "Confirm", "callback_data": "restart:confirm"},
-                    {"text": "Cancel", "callback_data": "restart:cancel"},
+                    {"text": "✅ Confirm", "callback_data": "restart:confirm"},
+                    {"text": "❌ Cancel", "callback_data": "restart:cancel"},
                 ]
             ]
         }
@@ -542,40 +551,103 @@ class TelegramBotService:
         if self.config is None:
             return
 
+        matches, unavailable_reason = self._find_shortput_actions()
+        if unavailable_reason is not None or not matches:
+            send_telegram_message(self.config, unavailable_reason or "Short put strategy unavailable.")
+            return
+
         token = secrets.token_urlsafe(8)
         expires_at = pd.Timestamp.now() + pd.Timedelta(seconds=SHORT_PUT_CONFIRMATION_TIMEOUT_SECONDS)
+        strategy_ids = [strategy_id for strategy_id, _ in matches]
         with self._lock:
-            self._pending_shortput_confirmations[token] = expires_at
+            self._pending_shortput_confirmations[token] = PendingShortPut(
+                expires_at=expires_at,
+                strategy_ids=strategy_ids,
+                selected_strategy_id=strategy_ids[0] if len(strategy_ids) == 1 else None,
+            )
+
+        if len(strategy_ids) > 1:
+            reply_markup = {
+                "inline_keyboard": [
+                    [{"text": strategy_id, "callback_data": f"shortput:select:{token}:{index}"}] for index, strategy_id in enumerate(strategy_ids)
+                ]
+                + [[{"text": "❌ Cancel", "callback_data": f"shortput:cancel:{token}"}]]
+            }
+            send_telegram_message(
+                self.config,
+                "Which strategy ID would you want to execute short put?",
+                reply_markup=reply_markup,
+            )
+            return
 
         reply_markup = {
             "inline_keyboard": [
                 [
-                    {"text": "Confirm", "callback_data": f"shortput:confirm:{token}"},
-                    {"text": "Cancel", "callback_data": f"shortput:cancel:{token}"},
+                    {"text": "✅ Confirm", "callback_data": f"shortput:confirm:{token}"},
+                    {"text": "❌ Cancel", "callback_data": f"shortput:cancel:{token}"},
                 ]
             ]
         }
         send_telegram_message(
             self.config,
-            "⚠️ Confirm short put strategy execution?",
+            f"⚠️ Confirm short put strategy execution?\n💸 Strategy ID: {strategy_ids[0]}",
             reply_markup=reply_markup,
         )
 
-    def _confirm_shortput(self, token: str, callback_query_id: str, chat_id: str, message_id: int) -> None:
-        if not self._consume_shortput_confirmation(token):
-            answer_callback_query(self.config, callback_query_id, "Short put confirmation expired")
+    def _select_shortput(self, payload: str, callback_query_id: str, chat_id: str, message_id: int) -> None:
+        try:
+            token, index_text = payload.rsplit(":", 1)
+            index = int(index_text)
+        except (ValueError, TypeError):
+            self._expire_shortput_callback(callback_query_id, chat_id, message_id)
+            return
+
+        pending = self._get_shortput_confirmation(token)
+        if pending is None:
+            self._expire_shortput_callback(callback_query_id, chat_id, message_id)
+            return
+        if index < 0 or index >= len(pending.strategy_ids):
+            answer_callback_query(self.config, callback_query_id, "Short put strategy unavailable.")
             edit_telegram_message_text(
                 self.config,
                 chat_id=chat_id,
                 message_id=message_id,
-                text="Short put confirmation expired.",
+                text="Short put strategy unavailable.",
                 reply_markup=EMPTY_INLINE_KEYBOARD,
             )
             return
 
-        strategy_id, shortput_action, unavailable_reason = self._find_shortput_action()
-        if unavailable_reason is not None or shortput_action is None or strategy_id is None:
-            message = unavailable_reason or "Short put strategy unavailable."
+        strategy_id = pending.strategy_ids[index]
+        with self._lock:
+            current = self._pending_shortput_confirmations.get(token)
+            if current is not None:
+                current.selected_strategy_id = strategy_id
+
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Confirm", "callback_data": f"shortput:confirm:{token}"},
+                    {"text": "❌ Cancel", "callback_data": f"shortput:cancel:{token}"},
+                ]
+            ]
+        }
+        answer_callback_query(self.config, callback_query_id, "Short put strategy selected")
+        edit_telegram_message_text(
+            self.config,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"⚠️ Confirm short put strategy execution?\n💸 Strategy ID: {strategy_id}",
+            reply_markup=reply_markup,
+        )
+
+    def _confirm_shortput(self, token: str, callback_query_id: str, chat_id: str, message_id: int) -> None:
+        pending = self._consume_shortput_confirmation(token)
+        if pending is None:
+            self._expire_shortput_callback(callback_query_id, chat_id, message_id)
+            return
+
+        if pending.selected_strategy_id is None:
+            message = "Short put strategy unavailable."
             answer_callback_query(self.config, callback_query_id, message)
             edit_telegram_message_text(
                 self.config,
@@ -585,6 +657,7 @@ class TelegramBotService:
                 reply_markup=EMPTY_INLINE_KEYBOARD,
             )
             return
+        strategy_id = pending.selected_strategy_id
 
         with self._lock:
             if self._shortput_running:
@@ -598,6 +671,20 @@ class TelegramBotService:
                 )
                 return
             self._shortput_running = True
+
+        shortput_action = self._resolve_shortput_action(strategy_id)
+        if shortput_action is None:
+            with self._lock:
+                self._shortput_running = False
+            answer_callback_query(self.config, callback_query_id, "Short put strategy unavailable.")
+            edit_telegram_message_text(
+                self.config,
+                chat_id=chat_id,
+                message_id=message_id,
+                text="Short put strategy unavailable.",
+                reply_markup=EMPTY_INLINE_KEYBOARD,
+            )
+            return
 
         answer_callback_query(self.config, callback_query_id, "Short put confirmed")
         edit_telegram_message_text(
@@ -621,15 +708,8 @@ class TelegramBotService:
             raise
 
     def _cancel_shortput(self, token: str, callback_query_id: str, chat_id: str, message_id: int) -> None:
-        if not self._consume_shortput_confirmation(token):
-            answer_callback_query(self.config, callback_query_id, "Short put confirmation expired")
-            edit_telegram_message_text(
-                self.config,
-                chat_id=chat_id,
-                message_id=message_id,
-                text="Short put confirmation expired.",
-                reply_markup=EMPTY_INLINE_KEYBOARD,
-            )
+        if self._consume_shortput_confirmation(token) is None:
+            self._expire_shortput_callback(callback_query_id, chat_id, message_id)
             return
 
         answer_callback_query(self.config, callback_query_id, "Short put execution cancelled")
@@ -641,20 +721,42 @@ class TelegramBotService:
             reply_markup=EMPTY_INLINE_KEYBOARD,
         )
 
-    def _consume_shortput_confirmation(self, token: str) -> bool:
-        with self._lock:
-            expires_at = self._pending_shortput_confirmations.pop(token, None)
-        if expires_at is None:
-            return False
-        return pd.Timestamp.now() < pd.Timestamp(expires_at)
+    def _expire_shortput_callback(self, callback_query_id: str, chat_id: str, message_id: int) -> None:
+        answer_callback_query(self.config, callback_query_id, "Short put confirmation expired")
+        edit_telegram_message_text(
+            self.config,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="Short put confirmation expired.",
+            reply_markup=EMPTY_INLINE_KEYBOARD,
+        )
 
-    def _find_shortput_action(self) -> tuple[str | None, Callable[[], None] | None, str | None]:
+    def _get_shortput_confirmation(self, token: str) -> PendingShortPut | None:
+        with self._lock:
+            pending = self._pending_shortput_confirmations.get(token)
+            if pending is None:
+                return None
+            if pd.Timestamp.now() >= pd.Timestamp(pending.expires_at):
+                self._pending_shortput_confirmations.pop(token, None)
+                return None
+            return pending
+
+    def _consume_shortput_confirmation(self, token: str) -> PendingShortPut | None:
+        with self._lock:
+            pending = self._pending_shortput_confirmations.pop(token, None)
+        if pending is None:
+            return None
+        if pd.Timestamp.now() >= pd.Timestamp(pending.expires_at):
+            return None
+        return pending
+
+    def _find_shortput_actions(self) -> tuple[list[tuple[str, Callable[[], None]]], str | None]:
         if self.engine is None:
-            return None, None, "Trading engine unavailable."
+            return [], "Trading engine unavailable."
 
         strategies = getattr(self.engine, "strategy", {})
         if not isinstance(strategies, dict) or not strategies:
-            return None, None, "Short put strategy unavailable."
+            return [], "Short put strategy unavailable."
 
         matches: list[tuple[str, Callable[[], None]]] = []
         for strategy_id, strategy in strategies.items():
@@ -669,11 +771,28 @@ class TelegramBotService:
                 matches.append((strategy_id, action))
 
         if not matches:
-            return None, None, "Short put strategy unavailable."
-        if len(matches) > 1:
-            return None, None, "Multiple short put strategies are registered."
-        strategy_id, action = matches[0]
-        return strategy_id, action, None
+            return [], "Short put strategy unavailable."
+        return matches, None
+
+    def _resolve_shortput_action(self, strategy_id: str) -> Callable[[], None] | None:
+        if self.engine is None:
+            return None
+
+        strategies = getattr(self.engine, "strategy", {})
+        if not isinstance(strategies, dict):
+            return None
+        strategy = strategies.get(strategy_id)
+        if strategy is None:
+            return None
+
+        get_actions = getattr(strategy, "get_strategy_actions", None)
+        if not callable(get_actions):
+            return None
+        actions = get_actions()
+        if not isinstance(actions, dict):
+            return None
+        action = actions.get(SHORT_PUT_ACTION_ID)
+        return action if callable(action) else None
 
     def _run_shortput_action(self, strategy_id: str, shortput_action: Callable[[], None]) -> None:
         try:
