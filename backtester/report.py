@@ -227,6 +227,82 @@ class WheelPerformanceReport:
         plt.tight_layout()
         return fig, cash_flow_summary
 
+    def plot_rolling_hit_rate(self, window: int = 63) -> tuple[plt.Figure, pd.DataFrame]:
+        if window < 1:
+            raise ValueError("window must be positive.")
+        if self.trades.empty:
+            raise ValueError("No trades are available to plot.")
+        if "cash_flow" not in self.trades.columns:
+            raise ValueError("Trade table does not include cash_flow.")
+
+        trades = self.trades.copy()
+        if "side" in trades.columns:
+            trades = trades.loc[trades["side"] == "short"].copy()
+        trades = trades.loc[trades["cash_flow"].notna()].copy()
+        if trades.empty:
+            raise ValueError("No completed short trades with cash_flow are available to plot.")
+
+        completion_date = pd.Series(pd.NaT, index=trades.index, dtype="datetime64[ns]")
+        if "date" in trades.columns and "days_held" in trades.columns:
+            entry_date = pd.to_datetime(trades["date"], errors="coerce")
+            days_held = pd.to_numeric(trades["days_held"], errors="coerce")
+            completion_date = entry_date + pd.to_timedelta(days_held, unit="D")
+        if "expiration" in trades.columns:
+            expiration_date = pd.to_datetime(trades["expiration"], errors="coerce")
+            completion_date = completion_date.fillna(expiration_date)
+
+        trades["completion_date"] = completion_date.dt.normalize()
+        trades = trades.loc[trades["completion_date"].notna()].copy()
+        if trades.empty:
+            raise ValueError("No usable trade completion dates are available to plot.")
+
+        trades["hit"] = trades["cash_flow"] > 0
+        daily_hits = (
+            trades.groupby("completion_date")
+            .agg(
+                daily_hit_count=("hit", "sum"),
+                daily_trade_count=("hit", "size"),
+            )
+            .sort_index()
+        )
+        rolling_hits = daily_hits["daily_hit_count"].rolling(f"{window}D").sum()
+        rolling_trades = daily_hits["daily_trade_count"].rolling(f"{window}D").sum()
+        rolling_summary = pd.DataFrame(
+            {
+                "rolling_hit_rate": rolling_hits.div(rolling_trades),
+                "rolling_hit_count": rolling_hits.astype(int),
+                "rolling_trade_count": rolling_trades.astype(int),
+            }
+        )
+        rolling_summary.index.name = "completion_date"
+
+        full_period_hit_rate = float(trades["hit"].mean())
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.plot(
+            rolling_summary.index,
+            rolling_summary["rolling_hit_rate"],
+            color="#2563eb",
+            linewidth=2.25,
+            label="Rolling Hit Rate",
+        )
+        ax.axhline(
+            full_period_hit_rate,
+            color="#475569",
+            linestyle="--",
+            linewidth=1.4,
+            alpha=0.85,
+            label=f"Full-Period Hit Rate ({self._fmt_percent(full_period_hit_rate)})",
+        )
+        ax.set_title(f"{window}-Day Rolling Hit Rate", fontsize=13, fontweight="bold")
+        ax.set_ylabel("Hit Rate", fontsize=11)
+        ax.set_xlabel("Completion Date", fontsize=11)
+        ax.set_ylim(0.0, 1.0)
+        ax.grid(True, color="#e2e8f0", linewidth=0.8)
+        ax.legend(fontsize=10)
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.1%}"))
+        plt.tight_layout()
+        return fig, rolling_summary
+
     def plot_equity_and_drawdown(self, benchmark: bool = True) -> plt.Figure:
         drawdown = self._drawdown_series(self.equity_curve)
         underlying_drawdown = self._drawdown_series(self.underlying_curve)
