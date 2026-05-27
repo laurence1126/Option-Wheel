@@ -125,7 +125,7 @@ class WheelBacktester:
                 cash_interest_today = max(cash, 0.0) * rf_today / 252.0
                 cash += cash_interest_today
 
-            if open_leg is not None and trade_ts == open_leg.expiration:
+            if open_leg is not None and trade_ts >= open_leg.expiration:
                 outcome = "expired"
 
                 if open_leg.type == "put" and spot < open_leg.strike:
