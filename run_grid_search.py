@@ -9,12 +9,12 @@ def main() -> None:
 
     grid_results_spy = run_grid_search(
         symbol="SPY",
-        start_date="2016-01-01",
-        end_date="2026-05-22",
+        start_date="2010-06-01",
+        end_date="2026-05-24",
         # put_day_of_week=[2, 4],
-        initial_cash=7_500,
+        initial_cash=3000,
         leverage=10,
-        max_workers=2,
+        max_workers=8,
     )
 
     grid_results_spy.to_csv(data_dir / "grid_results_spy.csv", index=False)
@@ -22,11 +22,11 @@ def main() -> None:
     grid_results_qqq = run_grid_search(
         symbol="QQQ",
         start_date="2016-01-01",
-        end_date="2026-05-22",
+        end_date="2026-05-24",
         # put_day_of_week=[2, 4],
         initial_cash=5_000,
         leverage=10,
-        max_workers=2,
+        max_workers=8,
     )
 
     grid_results_qqq.to_csv(data_dir / "grid_results_qqq.csv", index=False)

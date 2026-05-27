@@ -22,7 +22,7 @@ class OptionDataLoader:
         symbol_dir = self.data_root / self.symbol
         file = symbol_dir / f"{query_month}.csv"
         if not file.exists():
-            raise FileNotFoundError(f"File not found: {symbol_dir}/{query_month}.csv")
+            raise FileNotFoundError(f"File not found: {file}")
 
         frame = pd.read_csv(file)
         required = {
