@@ -190,6 +190,7 @@ def _build_pnl_chart_html(df: pd.DataFrame) -> str:
         go.Bar(
             x=x_values,
             y=chart_data["pnl"].values,
+            visible=False,
             marker_color=["#22c55e" if pnl >= 0 else "#ef4444" for pnl in chart_data["pnl"].values],
             text=[f"${pnl:,.0f}" for pnl in chart_data["pnl"].values],
             textposition="outside",
@@ -204,7 +205,6 @@ def _build_pnl_chart_html(df: pd.DataFrame) -> str:
         go.Bar(
             x=x_values,
             y=chart_data["pnl_pct"].values,
-            visible=False,
             marker_color=["#22c55e" if pnl_pct >= 0 else "#ef4444" for pnl_pct in chart_data["pnl_pct"].values],
             text=[f"{pnl_pct:,.1f}%" if pd.notna(pnl_pct) else "" for pnl_pct in chart_data["pnl_pct"].values],
             textposition="outside",
@@ -226,7 +226,7 @@ def _build_pnl_chart_html(df: pd.DataFrame) -> str:
         plot_bgcolor="#1b1b1b",
         font={"color": "#e5e7eb"},
         xaxis={"title": "Ticker / Expiration", "gridcolor": "#2f2f2f", "type": "category"},
-        yaxis={"title": "Option PnL (USD)", "gridcolor": "#2f2f2f", "tickprefix": "$", "tickformat": ",.0f"},
+        yaxis={"title": "Option PnL (%)", "gridcolor": "#2f2f2f", "ticksuffix": "%", "tickformat": ",.1f"},
     )
     return fig.to_html(
         config={
