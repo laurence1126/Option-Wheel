@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import re
+from functools import lru_cache
+from urllib.parse import quote
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import yfinance as yf
+
+OPTION_PATTERN = re.compile(r"^(?P<symbol>[A-Z]+)\s+(?P<date>\d{6})\s+(?P<strike>\d+(?:\.\d+)?)(?P<type>[CP])$")
+
+
+def get_watcher_data() -> tuple[pd.DataFrame, float | None]:
+    from futu import Currency, RET_OK
+    from trading.config import futu_config
+    from trading.utils import futu_utils
+
+    connection = futu_utils.create_trade_context(
+        futu_config.FUTU_OPEND_ADDRESS,
+        futu_config.FUTU_OPEND_PORT,
+        futu_config.TRADING_MARKET,
+    )
+    try:
+        ret, positions = connection.position_list_query()
+        if ret != RET_OK:
+            raise RuntimeError(positions)
+
+        ret, account = connection.accinfo_query(currency=Currency.USD)
+        current_bp = float(account.iloc[0]["fund_assets"] + account.iloc[0]["cash"]) if ret == RET_OK and not account.empty else None
+
+        rows = []
+        for _, position in positions.iterrows():
+            match = OPTION_PATTERN.match(str(position["stock_name"]))
+            qty = int(float(position["qty"]))
+            if not match or qty == 0 or match.group("type") != "P":
+                continue
+
+            ticker = match.group("symbol")
+            expiration = pd.to_datetime(match.group("date"), format="%y%m%d")
+            strike = float(match.group("strike"))
+            previous_close, close = get_close_prices(ticker)
+            rows.append(
+                {
+                    "TICKER": ticker,
+                    "QTY": qty,
+                    "PREMIUM": -float(position["cost_price"]) * qty * 100,
+                    "EXPIRATION": expiration.strftime("%Y-%m-%d"),
+                    "DTE": max((expiration.date() - pd.Timestamp.now().date()).days, 0),
+                    "STRIKE": strike,
+                    "CLOSE": close,
+                    "PCT EXEC": strike / close * 100,
+                    "_PREV CLOSE": previous_close,
+                    "_NOTIONAL": abs(qty * strike * 100),
+                }
+            )
+        if not rows:
+            return pd.DataFrame(), current_bp
+        return pd.DataFrame(rows).set_index("TICKER").sort_values("PCT EXEC", ascending=False), current_bp
+    finally:
+        connection.close()
+
+
+def fmt(column: str, value: object) -> str:
+    if pd.isna(value):
+        return ""
+    if isinstance(value, str):
+        return value
+    if column == "PCT EXEC":
+        return f"{float(value):,.2f}%"
+    if column in ("QTY", "DTE"):
+        return f"{int(value):,}"
+    return f"{float(value):,.2f}"
+
+
+@lru_cache
+def get_close_prices(ticker: str) -> tuple[float, float]:
+    closes = yf.Ticker(ticker).history(period="10d", interval="1d")["Close"]
+    if closes.empty:
+        raise ValueError(f"No price data returned for {ticker}.")
+    previous_close = closes.iloc[-2] if len(closes) >= 2 else np.nan
+    return float(previous_close), float(closes.iloc[-1])
+
+
+def build_option_watcher_context(df: pd.DataFrame | None = None, current_bp: float | None = None) -> dict[str, object]:
+    options = pd.DataFrame() if df is None else df
+    visible_columns = [column for column in options.columns if not column.startswith("_")]
+    rows = [_build_watcher_row(index, ticker, row, visible_columns) for index, (ticker, row) in enumerate(options.iterrows())]
+    total_bp = float(options["_NOTIONAL"].sum()) if "_NOTIONAL" in options else 0.0
+
+    return {
+        "title": "Option Price Watcher",
+        "date": pd.Timestamp.now().strftime("%Y-%m-%d"),
+        "columns": visible_columns,
+        "rows": rows,
+        "chart_html": _build_notional_chart_html(options) if not options.empty else None,
+        "current_bp": fmt("", current_bp) if current_bp is not None else None,
+        "total_bp": fmt("", total_bp),
+        "bp_status": _get_bp_status(total_bp, current_bp),
+        "leverage_ratio": fmt("", total_bp / current_bp) if current_bp else None,
+        "error_message": None,
+    }
+
+
+def _build_watcher_row(index: int, ticker: object, row: pd.Series, visible_columns: list[str]) -> dict[str, object]:
+    pct_exec = float(row["PCT EXEC"])
+    if pct_exec < 85:
+        row_status = "safe"
+    elif pct_exec > 95:
+        row_status = "risk"
+    else:
+        row_status = "neutral-alt" if index % 2 else "neutral"
+
+    cells = []
+    for column in visible_columns:
+        value = row[column]
+        cell_status = None
+        if column == "CLOSE":
+            cell_status = "down" if value < row["_PREV CLOSE"] else "up"
+        cells.append({"status": cell_status, "text": fmt(column, value)})
+
+    ticker_text = str(ticker)
+    return {
+        "ticker": ticker_text,
+        "ticker_url": f"https://finance.yahoo.com/quote/{quote(ticker_text, safe='')}",
+        "status": row_status,
+        "cells": cells,
+    }
+
+
+def _build_notional_chart_html(df: pd.DataFrame) -> str:
+    notionals = df.groupby("EXPIRATION")["_NOTIONAL"].sum().sort_index()
+    fig = go.Figure(
+        go.Bar(
+            x=[pd.Timestamp(expiration).strftime("%m/%d/%y") for expiration in notionals.index],
+            y=notionals.values,
+            marker_color="#60a5fa",
+            text=[f"${notional:,.0f}" for notional in notionals.values],
+            textposition="outside",
+            customdata=[pd.Timestamp(expiration).strftime("%Y-%m-%d") for expiration in notionals.index],
+            hovertemplate="%{customdata}<br>Notional: $%{y:,.0f}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        autosize=True,
+        height=380,
+        margin={"l": 70, "r": 24, "t": 24, "b": 64},
+        paper_bgcolor="#1b1b1b",
+        plot_bgcolor="#1b1b1b",
+        font={"color": "#e5e7eb"},
+        xaxis={"title": "Expiration Date", "gridcolor": "#2f2f2f", "type": "category"},
+        yaxis={"title": "Total Notional (USD)", "gridcolor": "#2f2f2f", "tickprefix": "$", "tickformat": ",.0f"},
+    )
+    return fig.to_html(
+        config={"displaylogo": False, "responsive": True},
+        default_height="380px",
+        full_html=False,
+        include_plotlyjs="cdn",
+    )
+
+
+def _get_bp_status(total_bp: float, current_bp: float | None) -> str:
+    if current_bp is None:
+        return "neutral"
+    return "positive" if total_bp <= current_bp else "negative"

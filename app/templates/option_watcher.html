@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0f172a">
+    <title>{{ title }}</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        padding: 24px;
+        background:
+          radial-gradient(circle at top, rgba(59, 130, 246, 0.18), transparent 34rem),
+          #0f172a;
+        color: #f8fafc;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      main {
+        width: min(1040px, 100%);
+        margin: 0 auto;
+        overflow: hidden;
+        border: 1.5px solid #2f2f2f;
+        border-radius: 20px;
+        background: #1b1b1b;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.28);
+      }
+
+      header {
+        padding: 28px 30px;
+        border-bottom: 1.5px solid #2f2f2f;
+        background: #111111;
+      }
+
+      section {
+        padding: 20px;
+        color: #e5e7eb;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        color: #f3f4f6;
+        font-size: clamp(24px, 6vw, 36px);
+        line-height: 1;
+      }
+
+      h2 {
+        font-size: 20px;
+        text-align: center;
+        line-height: 1;
+      }
+
+      h3 {
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      .date,
+      .note,
+      .empty {
+        color: #9ca3af;
+      }
+
+      .date {
+        margin-top: 14px;
+        color: #d1d5db;
+      }
+
+      .table-wrap {
+        margin-top: 16px;
+        overflow-x: auto;
+        border: 1.5px solid #2f2f2f;
+        border-radius: 16px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        white-space: nowrap;
+      }
+
+      th,
+      td {
+        padding: 12px 14px;
+        border-bottom: 1.5px solid #2f2f2f;
+        text-align: right;
+      }
+
+      th {
+        border-bottom-color: #3f3f46;
+        background: #2b2b2b;
+        color: #cbd5e1;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      th:first-child,
+      td:first-child {
+        text-align: left;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      tr.safe td {
+        background: #183a2f;
+      }
+
+      tr.risk td {
+        background: #3a1f2a;
+      }
+
+      tr.neutral td {
+        background: #1f1f1f;
+      }
+
+      tr.neutral-alt td {
+        background: #242424;
+      }
+
+      a {
+        color: #93c5fd;
+        font-weight: 700;
+      }
+
+      .up,
+      .positive {
+        color: #22c55e;
+      }
+
+      .down,
+      .negative {
+        color: #ef4444;
+      }
+
+      .chart {
+        margin-top: 28px;
+        overflow: hidden;
+      }
+
+      .summary {
+        margin-top: 14px;
+        color: #e5e7eb;
+        font-size: 14px;
+        line-height: 1.7;
+      }
+
+      .note {
+        margin-top: 6px;
+        font-size: 12px;
+      }
+
+      .empty {
+        padding: 28px 4px 8px;
+        line-height: 1.6;
+      }
+
+      .error {
+        border-color: rgba(248, 113, 113, 0.32);
+        color: #fecaca;
+      }
+
+      @media (max-width: 540px) {
+        body {
+          padding: 14px;
+        }
+
+        header {
+          padding: 24px 20px;
+        }
+
+        section {
+          padding: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>{{ title }}</h1>
+        <h3 class="date">Date: {{ date }}</h3>
+      </header>
+
+      <section{% if error_message %} class="error"{% endif %}>
+        {% if error_message %}
+          <p>{{ error_message }}</p>
+        {% elif rows %}
+          <h2>Open Short Put Positions</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  {% for column in columns %}
+                    <th>{{ column }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in rows %}
+                  <tr class="{{ row.status }}">
+                    <td><a href="{{ row.ticker_url }}" target="_blank" rel="noopener noreferrer">{{ row.ticker }}</a></td>
+                    {% for cell in row.cells %}
+                      <td{% if cell.status %} class="{{ cell.status }}"{% endif %}>{{ cell.text }}</td>
+                    {% endfor %}
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="chart">
+            <h2>Option Notional by Expiration</h2>
+            {{ chart_html | safe }}
+          </div>
+
+          <div class="summary">
+            {% if current_bp %}
+              Current available cash: <strong>${{ current_bp }}</strong><br>
+            {% endif %}
+            Total BP required (worst case): <strong class="{{ bp_status }}">${{ total_bp }}</strong>
+            {% if leverage_ratio %}
+              <br>Leverage ratio (worst case): <strong class="{{ bp_status }}">{{ leverage_ratio }}</strong>
+            {% endif %}
+          </div>
+          <p class="note">Prices are based on recent closing data from Yahoo Finance. Units in USD.</p>
+        {% else %}
+          <h2>Open Short Put Positions</h2>
+          <p class="empty">No open short put positions were found.</p>
+        {% endif %}
+      </section>
+    </main>
+  </body>
+</html>
