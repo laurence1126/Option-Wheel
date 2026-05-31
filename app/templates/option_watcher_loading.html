@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0f172a" />
     <title>Option Price Watcher</title>
+    <script src="https://telegram.org/js/telegram-web-app.js?62"></script>
     <style>
       * {
         box-sizing: border-box;
@@ -114,7 +115,15 @@
     <script>
       const loading = document.querySelector("#loading");
       const watcherFrame = document.querySelector("#watcher-frame");
+      const telegramApp = window.Telegram?.WebApp;
       let reportResizeObserver;
+
+      if (telegramApp?.isVersionAtLeast?.("7.7")) {
+        telegramApp.disableVerticalSwipes();
+      }
+      if (telegramApp?.isVersionAtLeast?.("8.0")) {
+        telegramApp.requestFullscreen();
+      }
 
       function resizeWatcherFrame() {
         const reportDocument = watcherFrame.contentDocument;
