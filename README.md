@@ -63,10 +63,10 @@ AAPL, AMZN, GOOGL, META, MSFT, MU, NVDA, ORCL, QQQ, QQQM, SOXL, SPY, SPYM, TSLA
 
 ## Installation
 
-Create an environment and install the core dependencies:
+Create an environment and install the pinned repository dependencies:
 
 ```bash
-pip install pandas numpy matplotlib requests ivolatility
+pip install -r requirement.txt
 ```
 
 If you only want to run backtests from existing CSV data, `ivolatility` and `requests` are only needed for `fetch_option_data.py`.
