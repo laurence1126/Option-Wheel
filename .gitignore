@@ -2,6 +2,7 @@
 .config
 .RSA_private_key
 .vscode/
+.venv/
 __pycache__/
 data/
 log/
