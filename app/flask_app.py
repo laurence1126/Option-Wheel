@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
+from pathlib import Path
 from collections.abc import Callable
 
 from flask import Flask
@@ -11,6 +13,9 @@ from app import create_app
 from trading.utils.logging_utils import configure_logger
 
 logger = configure_logger(__name__)
+
+if not __package__:
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 
 class FlaskAppService:
@@ -69,3 +74,14 @@ class FlaskAppService:
                 self._server = None
                 self._server_thread = None
         logger.info("Flask app service stopped.")
+
+
+if __name__ == "__main__":
+    service = FlaskAppService()
+    try:
+        service.start()
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        service.shutdown()
