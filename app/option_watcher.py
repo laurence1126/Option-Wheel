@@ -130,21 +130,31 @@ def _build_watcher_row(index: int, ticker: object, row: pd.Series, visible_colum
 
 
 def _build_notional_chart_html(df: pd.DataFrame) -> str:
-    notionals = df.groupby("EXPIRATION")["_NOTIONAL"].sum().sort_index()
+    chart_data = (
+        df.assign(_CONTRACTS=df["QTY"].abs())
+        .groupby("EXPIRATION")
+        .agg(notional=("_NOTIONAL", "sum"), contracts=("_CONTRACTS", "sum"))
+        .sort_index()
+    )
     fig = go.Figure(
         go.Bar(
-            x=[pd.Timestamp(expiration).strftime("%m/%d/%y") for expiration in notionals.index],
-            y=notionals.values,
+            x=[pd.Timestamp(expiration).strftime("%m/%d/%y") for expiration in chart_data.index],
+            y=chart_data["notional"].values,
             marker_color="#60a5fa",
-            text=[f"${notional:,.0f}" for notional in notionals.values],
+            text=[f"${notional:,.0f}" for notional in chart_data["notional"].values],
             textposition="outside",
-            customdata=[pd.Timestamp(expiration).strftime("%Y-%m-%d") for expiration in notionals.index],
-            hovertemplate="%{customdata}<br>Notional: $%{y:,.0f}<extra></extra>",
+            customdata=[
+                [pd.Timestamp(expiration).strftime("%Y-%m-%d"), int(contracts)]
+                for expiration, contracts in zip(chart_data.index, chart_data["contracts"], strict=True)
+            ],
+            hovertemplate="%{customdata[0]}<br>Notional: $%{y:,.0f}<br># of contracts: %{customdata[1]:,.0f}<extra></extra>",
         )
     )
     fig.update_layout(
         autosize=True,
+        dragmode=False,
         height=380,
+        hoverlabel={"bgcolor": "#111111", "bordercolor": "#60a5fa", "font": {"color": "#e5e7eb"}},
         margin={"l": 70, "r": 24, "t": 24, "b": 64},
         paper_bgcolor="#1b1b1b",
         plot_bgcolor="#1b1b1b",
@@ -153,7 +163,11 @@ def _build_notional_chart_html(df: pd.DataFrame) -> str:
         yaxis={"title": "Total Notional (USD)", "gridcolor": "#2f2f2f", "tickprefix": "$", "tickformat": ",.0f"},
     )
     return fig.to_html(
-        config={"displaylogo": False, "responsive": True},
+        config={
+            "displaylogo": False,
+            "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+            "responsive": True,
+        },
         default_height="380px",
         full_html=False,
         include_plotlyjs="cdn",
