@@ -147,6 +147,7 @@ def _build_notional_chart_html(df: pd.DataFrame) -> str:
         go.Bar(
             x=[pd.Timestamp(expiration).strftime("%m/%d/%y") for expiration in chart_data.index],
             y=chart_data["notional"].values,
+            visible=False,
             marker_color="#60a5fa",
             text=[f"${notional:,.0f}" for notional in chart_data["notional"].values],
             textposition="outside",
@@ -164,7 +165,6 @@ def _build_notional_chart_html(df: pd.DataFrame) -> str:
                 for ticker, expiration in zip(ticker_chart_data["TICKER"], ticker_chart_data["EXPIRATION"], strict=True)
             ],
             y=ticker_chart_data["notional"].values,
-            visible=False,
             marker_color="#60a5fa",
             text=[f"${notional:,.0f}" for notional in ticker_chart_data["notional"].values],
             textposition="outside",
@@ -186,12 +186,12 @@ def _build_notional_chart_html(df: pd.DataFrame) -> str:
         showlegend=False,
         height=380,
         hoverlabel={"bgcolor": "#111111", "bordercolor": "#60a5fa", "font": {"color": "#e5e7eb"}},
-        margin={"l": 70, "r": 24, "t": 24, "b": 64},
+        margin={"l": 96, "r": 24, "t": 24, "b": 64, "autoexpand": False},
         paper_bgcolor="#1b1b1b",
         plot_bgcolor="#1b1b1b",
         font={"color": "#e5e7eb"},
-        xaxis={"title": "Expiration Date", "gridcolor": "#2f2f2f", "type": "category"},
-        yaxis={"title": "Total Notional (USD)", "gridcolor": "#2f2f2f", "tickprefix": "$", "tickformat": ",.0f"},
+        xaxis={"title": "Ticker / Expiration", "gridcolor": "#2f2f2f", "type": "category", "automargin": False},
+        yaxis={"title": "Total Notional (USD)", "gridcolor": "#2f2f2f", "tickprefix": "$", "tickformat": ",.0f", "automargin": False},
     )
     return fig.to_html(
         config={
@@ -206,6 +206,8 @@ def _build_notional_chart_html(df: pd.DataFrame) -> str:
 
 
 def _build_pnl_chart_html(df: pd.DataFrame) -> str:
+    expiration_chart_data = df.groupby("EXPIRATION", as_index=False).agg(pnl=("_PNL", "sum"), premium=("PREMIUM", "sum")).sort_values("EXPIRATION")
+    expiration_chart_data["pnl_pct"] = expiration_chart_data["pnl"].div(expiration_chart_data["premium"].replace(0, np.nan)).mul(100)
     chart_data = (
         df.reset_index()
         .groupby(["TICKER", "EXPIRATION"], as_index=False)
@@ -213,11 +215,36 @@ def _build_pnl_chart_html(df: pd.DataFrame) -> str:
         .sort_values(["EXPIRATION", "TICKER"])
     )
     chart_data["pnl_pct"] = chart_data["pnl"].div(chart_data["premium"].replace(0, np.nan)).mul(100)
+    expiration_x_values = [pd.Timestamp(expiration).strftime("%m/%d/%y") for expiration in expiration_chart_data["EXPIRATION"]]
     x_values = [
         f"{ticker}<br>{pd.Timestamp(expiration).strftime('%m/%d/%y')}"
         for ticker, expiration in zip(chart_data["TICKER"], chart_data["EXPIRATION"], strict=True)
     ]
     fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=expiration_x_values,
+            y=expiration_chart_data["pnl"].values,
+            visible=False,
+            marker_color=["#22c55e" if pnl >= 0 else "#ef4444" for pnl in expiration_chart_data["pnl"].values],
+            text=[f"${pnl:,.0f}" for pnl in expiration_chart_data["pnl"].values],
+            textposition="outside",
+            customdata=[[pd.Timestamp(expiration).strftime("%Y-%m-%d")] for expiration in expiration_chart_data["EXPIRATION"]],
+            hovertemplate="%{customdata[0]}<br>PnL: $%{y:,.2f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=expiration_x_values,
+            y=expiration_chart_data["pnl_pct"].values,
+            visible=False,
+            marker_color=["#22c55e" if pnl_pct >= 0 else "#ef4444" for pnl_pct in expiration_chart_data["pnl_pct"].values],
+            text=[f"{pnl_pct:,.1f}%" if pd.notna(pnl_pct) else "" for pnl_pct in expiration_chart_data["pnl_pct"].values],
+            textposition="outside",
+            customdata=[[pd.Timestamp(expiration).strftime("%Y-%m-%d")] for expiration in expiration_chart_data["EXPIRATION"]],
+            hovertemplate="%{customdata[0]}<br>PnL: %{y:,.2f}%<extra></extra>",
+        )
+    )
     fig.add_trace(
         go.Bar(
             x=x_values,
@@ -253,12 +280,12 @@ def _build_pnl_chart_html(df: pd.DataFrame) -> str:
         showlegend=False,
         height=380,
         hoverlabel={"bgcolor": "#111111", "bordercolor": "#60a5fa", "font": {"color": "#e5e7eb"}},
-        margin={"l": 70, "r": 24, "t": 24, "b": 64},
+        margin={"l": 96, "r": 24, "t": 24, "b": 64, "autoexpand": False},
         paper_bgcolor="#1b1b1b",
         plot_bgcolor="#1b1b1b",
         font={"color": "#e5e7eb"},
-        xaxis={"title": "Ticker / Expiration", "gridcolor": "#2f2f2f", "type": "category"},
-        yaxis={"title": "Option PnL (%)", "gridcolor": "#2f2f2f", "ticksuffix": "%", "tickformat": ",.1f"},
+        xaxis={"title": "Ticker / Expiration", "gridcolor": "#2f2f2f", "type": "category", "automargin": False},
+        yaxis={"title": "Option PnL (%)", "gridcolor": "#2f2f2f", "ticksuffix": "%", "tickformat": ",.1f", "automargin": False},
     )
     return fig.to_html(
         config={

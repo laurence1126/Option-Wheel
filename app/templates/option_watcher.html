@@ -287,7 +287,7 @@
             </div>
 
             <div class="chart notional-chart">
-              <h2><button class="chart-title-toggle notional-chart-toggle" type="button" aria-pressed="false">Option Notional by Expiration</button></h2>
+              <h2><button class="chart-title-toggle notional-chart-toggle" type="button" aria-pressed="true">Option Notional by Ticker / Expiration</button></h2>
               {{ chart_html | safe }}
             </div>
 
@@ -432,6 +432,25 @@
         button.addEventListener("click", () => sortTable(button));
       });
 
+      function updatePnlChart() {
+        const showTicker = notionalChartToggle.getAttribute("aria-pressed") === "true";
+        const showPercentage = pnlChartToggle.getAttribute("aria-pressed") === "true";
+        pnlChartToggle.textContent = `Option PnL by ${showTicker ? "Ticker / Expiration" : "Expiration"} (${showPercentage ? "%" : "$"})`;
+        Plotly.restyle(pnlChart, "visible", [
+          !showTicker && !showPercentage,
+          !showTicker && showPercentage,
+          showTicker && !showPercentage,
+          showTicker && showPercentage,
+        ]);
+        Plotly.relayout(pnlChart, {
+          "xaxis.title.text": showTicker ? "Ticker / Expiration" : "Expiration Date",
+          "yaxis.title.text": `Option PnL (${showPercentage ? "%" : "USD"})`,
+          "yaxis.tickprefix": showPercentage ? "" : "$",
+          "yaxis.ticksuffix": showPercentage ? "%" : "",
+          "yaxis.tickformat": showPercentage ? ",.1f" : ",.0f",
+        });
+      }
+
       notionalChartToggle?.addEventListener("click", () => {
         const showTicker = notionalChartToggle.getAttribute("aria-pressed") !== "true";
         notionalChartToggle.setAttribute("aria-pressed", String(showTicker));
@@ -442,19 +461,13 @@
         Plotly.relayout(notionalChart, {
           "xaxis.title.text": showTicker ? "Ticker / Expiration" : "Expiration Date",
         });
+        updatePnlChart();
       });
 
       pnlChartToggle?.addEventListener("click", () => {
         const showPercentage = pnlChartToggle.getAttribute("aria-pressed") !== "true";
         pnlChartToggle.setAttribute("aria-pressed", String(showPercentage));
-        pnlChartToggle.textContent = `Option PnL by Ticker / Expiration (${showPercentage ? "%" : "$"})`;
-        Plotly.restyle(pnlChart, "visible", [!showPercentage, showPercentage]);
-        Plotly.relayout(pnlChart, {
-          "yaxis.title.text": `Option PnL (${showPercentage ? "%" : "USD"})`,
-          "yaxis.tickprefix": showPercentage ? "" : "$",
-          "yaxis.ticksuffix": showPercentage ? "%" : "",
-          "yaxis.tickformat": showPercentage ? ",.1f" : ",.0f",
-        });
+        updatePnlChart();
       });
 
       fitReportToPhone();
