@@ -53,6 +53,7 @@ def get_watcher_data() -> tuple[pd.DataFrame, float | None]:
                     "PCT EXEC": strike / close * 100,
                     "_PREV CLOSE": previous_close,
                     "_NOTIONAL": abs(qty * strike * 100),
+                    "_PNL": float(position["unrealized_pl"]) + float(position["realized_pl"]),
                 }
             )
         if not rows:
@@ -95,6 +96,7 @@ def build_option_watcher_context(df: pd.DataFrame | None = None, current_bp: flo
         "columns": visible_columns,
         "rows": rows,
         "chart_html": _build_notional_chart_html(options) if not options.empty else None,
+        "pnl_chart_html": _build_pnl_chart_html(options) if not options.empty and "_PNL" in options else None,
         "current_bp": fmt("", current_bp) if current_bp is not None else None,
         "total_bp": fmt("", total_bp),
         "bp_status": _get_bp_status(total_bp, current_bp),
@@ -168,6 +170,49 @@ def _build_notional_chart_html(df: pd.DataFrame) -> str:
         default_height="380px",
         full_html=False,
         include_plotlyjs="cdn",
+    )
+
+
+def _build_pnl_chart_html(df: pd.DataFrame) -> str:
+    chart_data = df.reset_index().groupby(["TICKER", "EXPIRATION"], as_index=False).agg(pnl=("_PNL", "sum")).sort_values(["EXPIRATION", "TICKER"])
+    fig = go.Figure(
+        go.Bar(
+            x=[
+                f"{ticker}<br>{pd.Timestamp(expiration).strftime('%m/%d/%y')}"
+                for ticker, expiration in zip(chart_data["TICKER"], chart_data["EXPIRATION"], strict=True)
+            ],
+            y=chart_data["pnl"].values,
+            marker_color=["#22c55e" if pnl >= 0 else "#ef4444" for pnl in chart_data["pnl"].values],
+            text=[f"${pnl:,.0f}" for pnl in chart_data["pnl"].values],
+            textposition="outside",
+            customdata=[
+                [ticker, pd.Timestamp(expiration).strftime("%Y-%m-%d")]
+                for ticker, expiration in zip(chart_data["TICKER"], chart_data["EXPIRATION"], strict=True)
+            ],
+            hovertemplate="%{customdata[0]}<br>%{customdata[1]}<br>PnL: $%{y:,.2f}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        autosize=True,
+        dragmode=False,
+        height=380,
+        hoverlabel={"bgcolor": "#111111", "bordercolor": "#60a5fa", "font": {"color": "#e5e7eb"}},
+        margin={"l": 70, "r": 24, "t": 24, "b": 64},
+        paper_bgcolor="#1b1b1b",
+        plot_bgcolor="#1b1b1b",
+        font={"color": "#e5e7eb"},
+        xaxis={"title": "Ticker / Expiration", "gridcolor": "#2f2f2f", "type": "category"},
+        yaxis={"title": "Option PnL (USD)", "gridcolor": "#2f2f2f", "tickprefix": "$", "tickformat": ",.0f"},
+    )
+    return fig.to_html(
+        config={
+            "displaylogo": False,
+            "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+            "responsive": True,
+        },
+        default_height="380px",
+        full_html=False,
+        include_plotlyjs=False,
     )
 
 

@@ -278,6 +278,13 @@
               {{ chart_html | safe }}
             </div>
 
+            {% if pnl_chart_html %}
+              <div class="chart">
+                <h2>Option PnL by Ticker (Expiration)</h2>
+                {{ pnl_chart_html | safe }}
+              </div>
+            {% endif %}
+
             <div class="summary">
               {% if current_bp %}
                 Available Cash: <strong>${{ current_bp }}</strong><br>
