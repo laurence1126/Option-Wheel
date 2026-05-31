@@ -1,6 +1,9 @@
 import datetime as dt
+import subprocess
+import sys
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Any
 from zoneinfo import ZoneInfo
 
@@ -38,6 +41,7 @@ class FutuTradingEngine:
         self._timer_thread: threading.Thread | None = None
         self._time_triggers_configured = False
         self._active_setup_strategy_id: str | None = None
+        self._app_process: subprocess.Popen | None = None
 
         # Futu trading configuration
         self.trading_environment = futu_config.TRADING_ENVIRONMENT
@@ -88,6 +92,11 @@ class FutuTradingEngine:
 
             if self.has_daily_time_trigger():
                 self.start_time_trigger_scheduler()
+
+            try:
+                self.start_app_server()
+            except Exception as exc:
+                logger.error("Option watcher app failed to start; trading engine will continue: %s", exc)
         except Exception:
             self._running = False
             self._started_at = None
@@ -108,6 +117,10 @@ class FutuTradingEngine:
             self.telegram.shutdown()
         except Exception as exc:
             logger.error("Telegram bot service failed to stop cleanly: %s", exc)
+        try:
+            self.stop_app_server()
+        except Exception as exc:
+            logger.error("Option watcher app failed to stop cleanly: %s", exc)
         if self._timer_thread and self._timer_thread.is_alive() and threading.current_thread() is not self._timer_thread:
             self._timer_thread.join(timeout=5)
         for context in (self.quote_context, self.trade_context):
@@ -119,6 +132,29 @@ class FutuTradingEngine:
         self._running = False
         self._started_at = None
         logger.info("Trading engine closed.")
+
+    def start_app_server(self) -> None:
+        current_process = getattr(self, "_app_process", None)
+        if current_process is not None and current_process.poll() is None:
+            return
+
+        project_root = Path(__file__).resolve().parents[2]
+        self._app_process = subprocess.Popen([sys.executable, "-m", "app.main"], cwd=project_root)
+        logger.info("Option watcher app started: pid=%s.", self._app_process.pid)
+
+    def stop_app_server(self) -> None:
+        process = getattr(self, "_app_process", None)
+        self._app_process = None
+        if process is None or process.poll() is not None:
+            return
+
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        logger.info("Option watcher app stopped.")
 
     @staticmethod
     def _normalize_strategy_input(strategy: TradingStrategyBase | list[TradingStrategyBase] | None) -> dict[str, TradingStrategyBase]:
