@@ -11,7 +11,9 @@
       }
 
       body {
+        display: flex;
         min-height: 100vh;
+        min-height: 100svh;
         margin: 0;
         background:
           radial-gradient(
@@ -71,14 +73,18 @@
       }
 
       .watcher-frame {
+        display: block;
         width: 100%;
         min-height: 100vh;
+        min-height: 100svh;
+        margin: auto 0;
         border: 0;
         opacity: 0;
         transition: opacity 180ms ease;
       }
 
       .watcher-frame.ready {
+        min-height: 0;
         opacity: 1;
       }
 
@@ -108,22 +114,45 @@
     <script>
       const loading = document.querySelector("#loading");
       const watcherFrame = document.querySelector("#watcher-frame");
+      let reportResizeObserver;
 
       function resizeWatcherFrame() {
-        const watcherHeight =
-          watcherFrame.contentDocument?.documentElement.scrollHeight;
-        if (watcherHeight) {
+        const reportDocument = watcherFrame.contentDocument;
+        const reportWrapper = reportDocument?.querySelector(".report-wrapper");
+        const reportWindow = reportDocument?.defaultView;
+
+        if (!reportDocument?.body || !reportWrapper || !reportWindow) {
+          return;
+        }
+
+        const bodyStyle = reportWindow.getComputedStyle(reportDocument.body);
+        const bodyPadding =
+          Number.parseFloat(bodyStyle.paddingTop) +
+          Number.parseFloat(bodyStyle.paddingBottom);
+        const watcherHeight = Math.ceil(reportWrapper.offsetHeight + bodyPadding);
+
+        if (watcherHeight > 0) {
           watcherFrame.style.height = `${watcherHeight}px`;
         }
       }
 
       watcherFrame.addEventListener("load", () => {
-        resizeWatcherFrame();
         loading.classList.add("hidden");
         watcherFrame.classList.add("ready");
+        resizeWatcherFrame();
+
+        reportResizeObserver?.disconnect();
+        const reportWrapper =
+          watcherFrame.contentDocument?.querySelector(".report-wrapper");
+        if (reportWrapper && "ResizeObserver" in window) {
+          reportResizeObserver = new ResizeObserver(resizeWatcherFrame);
+          reportResizeObserver.observe(reportWrapper);
+        }
       });
 
-      window.addEventListener("resize", resizeWatcherFrame);
+      window.addEventListener("resize", () => {
+        window.requestAnimationFrame(resizeWatcherFrame);
+      });
       watcherFrame.src = watcherFrame.dataset.src;
     </script>
   </body>
