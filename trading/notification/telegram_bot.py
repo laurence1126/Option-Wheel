@@ -18,7 +18,7 @@ from trading.notification.telegram_consts import (
     RESTART_ENV_VAR,
     SHORT_PUT_ACTION_ID,
     SHORT_PUT_CONFIRMATION_TIMEOUT_SECONDS,
-    get_option_watcher_url,
+    OPTION_WATCHER_APP_URL,
 )
 from trading.notification.telegram_status import build_status_message
 from trading.notification.telegram_summary import replace_summary_prompt
@@ -201,13 +201,8 @@ class TelegramBotService:
         elif command == "/status":
             send_telegram_message(self.config, build_status_message(self.engine), parse_mode="HTML")
         elif command == "/watcher":
-            try:
-                watcher_url = get_option_watcher_url()
-            except ValueError as exc:
-                logger.warning("Option watcher unavailable: %s", exc)
-                send_telegram_message(self.config, "Option watcher unavailable.")
-                return
-            reply_markup = {"inline_keyboard": [[{"text": "📲 Open Option Watcher", "url": watcher_url}]]}
+            watcher_url = OPTION_WATCHER_APP_URL
+            reply_markup = {"inline_keyboard": [[{"text": "📲 Open Option Watcher", "web_app": {"url": watcher_url}}]]}
             send_telegram_message(self.config, "Click the button below:", reply_markup=reply_markup)
         elif command == "/log":
             latest_log = None

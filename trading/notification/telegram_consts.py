@@ -1,19 +1,4 @@
-import socket
-import psutil
-
-
-def get_host(prefix: str) -> str:
-    for addresses in psutil.net_if_addrs().values():
-        for address in addresses:
-            if address.family == socket.AF_INET and address.address.startswith(prefix):
-                return address.address
-    raise ValueError(f"No IPv4 host address starts with {prefix!r}.")
-
-
-def get_option_watcher_url() -> str:
-    host = get_host("100")
-    return f"http://{host}:5001/option-watcher"
-
+OPTION_WATCHER_APP_URL = "https://option-wheel.ubuntu-nuc.com/option-watcher"
 
 BOT_COMMANDS = [
     {"command": "status", "description": "📊 Show trading engine status"},
