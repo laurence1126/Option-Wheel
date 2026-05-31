@@ -83,6 +83,9 @@ class FutuTradingEngine:
             if not self._time_triggers_configured:
                 self._setup_strategy_time_triggers()
                 self._time_triggers_configured = True
+
+            self._run_startup_recovery_actions()
+
             if self.has_daily_time_trigger():
                 self.start_time_trigger_scheduler()
         except Exception:
@@ -151,6 +154,55 @@ class FutuTradingEngine:
                 logger.error("Strategy time trigger setup failed: strategy_id=%s, error=%s", strategy_id, exc)
             finally:
                 self._active_setup_strategy_id = None
+
+    def _run_startup_recovery_actions(self) -> None:
+        matched_strategy_count = 0
+        recovery_failed = False
+        for strategy_id, strategy in self.strategy.items():
+            get_actions = getattr(strategy, "get_restart_actions", None)
+            if not callable(get_actions):
+                continue
+            try:
+                restart_actions = get_actions()
+            except Exception:
+                recovery_failed = True
+                logger.exception("Startup recovery failed because restart actions are unavailable: strategy_id=%s.", strategy_id)
+                continue
+            if not isinstance(restart_actions, dict):
+                recovery_failed = True
+                logger.error("Startup recovery skipped strategy because get_restart_actions did not return a dict: strategy_id=%s.", strategy_id)
+                continue
+            if not restart_actions:
+                continue
+
+            matched_strategy_count += 1
+            for action_name, action in restart_actions.items():
+                if not callable(action):
+                    recovery_failed = True
+                    logger.error("Startup recovery skipped non-callable action: strategy_id=%s, action=%s.", strategy_id, action_name)
+                    continue
+
+                logger.info("Startup recovery starting: strategy_id=%s, action=%s.", strategy_id, action_name)
+                try:
+                    action_succeeded = action()
+                except Exception:
+                    recovery_failed = True
+                    logger.exception("Startup recovery failed: strategy_id=%s, action=%s.", strategy_id, action_name)
+                else:
+                    if action_succeeded is False:
+                        recovery_failed = True
+                        logger.error("Startup recovery failed: strategy_id=%s, action=%s returned False.", strategy_id, action_name)
+                    else:
+                        logger.info("Startup recovery completed: strategy_id=%s, action=%s.", strategy_id, action_name)
+
+        if matched_strategy_count == 0:
+            logger.info("Startup recovery skipped because no strategy registered restart actions.")
+
+        if recovery_failed:
+            try:
+                self.telegram.send_message("🚨 Startup recovery failed. Check logs.")
+            except Exception:
+                logger.exception("Startup recovery Telegram warning failed.")
 
     def _dispatch_strategy_callback(self, callback_name: str, *args) -> None:
         for strategy_id, strategy in self.strategy.items():

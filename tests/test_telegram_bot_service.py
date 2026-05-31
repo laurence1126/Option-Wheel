@@ -147,6 +147,25 @@ class TelegramBotServiceTest(unittest.TestCase):
 
         self.assertEqual(send_message.call_args_list[0].args[1], "Trading engine restart complete 🎉")
 
+    def test_start_after_exec_restart_does_not_spawn_recovery_thread(self):
+        service = self.make_service()
+        config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+
+        with (
+            patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
+            patch("trading.notification.telegram_bot.set_telegram_commands", return_value=True),
+            patch("trading.notification.telegram_bot.set_telegram_commands_menu", return_value=True),
+            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)),
+            patch("trading.notification.telegram_bot.get_telegram_updates", return_value=[]),
+            patch("trading.notification.telegram_bot.threading.Thread") as make_thread,
+            patch.dict("trading.notification.telegram_bot.os.environ", {RESTART_ENV_VAR: "1"}, clear=True),
+        ):
+            make_thread.return_value.is_alive.return_value = False
+            service.start(FakeEngine())
+            service.shutdown()
+
+        self.assertEqual([thread_call.kwargs["name"] for thread_call in make_thread.call_args_list], ["telegram-bot-poller"])
+
     def test_start_discards_pending_updates_before_polling(self):
         service = self.make_service()
         config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
@@ -342,7 +361,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.assertIn("short-token", service._pending_shortput_confirmations)
         send_message.assert_called_once()
         self.assertIs(send_message.call_args.args[0], service.config)
-        self.assertEqual(send_message.call_args.args[1], "⚠️ Confirm short put strategy execution?\nStrategy ID: short_put")
+        self.assertEqual(send_message.call_args.args[1], "⚠️ Confirm short put strategy execution?\n💸 Strategy ID: short_put")
         reply_markup = send_message.call_args.kwargs["reply_markup"]
         self.assertEqual(reply_markup["inline_keyboard"][0][0]["callback_data"], "shortput:confirm:short-token")
         self.assertEqual(reply_markup["inline_keyboard"][0][1]["callback_data"], "shortput:cancel:short-token")
@@ -591,7 +610,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
         self.assertEqual(service._pending_shortput_confirmations["short-token"].selected_strategy_id, "second_short_put")
         answer.assert_called_once_with(service.config, "callback-1", "Short put strategy selected")
-        self.assertEqual(edit_message.call_args.kwargs["text"], "⚠️ Confirm short put strategy execution?\nStrategy ID: second_short_put")
+        self.assertEqual(edit_message.call_args.kwargs["text"], "⚠️ Confirm short put strategy execution?\n💸 Strategy ID: second_short_put")
         reply_markup = edit_message.call_args.kwargs["reply_markup"]
         self.assertEqual(reply_markup["inline_keyboard"][0][0]["callback_data"], "shortput:confirm:short-token")
         self.assertEqual(reply_markup["inline_keyboard"][0][1]["callback_data"], "shortput:cancel:short-token")

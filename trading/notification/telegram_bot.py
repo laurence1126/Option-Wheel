@@ -115,13 +115,6 @@ class TelegramBotService:
         self._running = True
         self._poll_thread = threading.Thread(target=self._poll_loop, name="telegram-bot-poller", daemon=True)
         self._poll_thread.start()
-        if was_restarted:
-            restart_recovery_thread = threading.Thread(
-                target=self._run_restart_recovery_actions,
-                name="telegram-restart-recovery",
-                daemon=True,
-            )
-            restart_recovery_thread.start()
         logger.info("Telegram bot service started.")
 
     def shutdown(self) -> None:
@@ -882,66 +875,6 @@ class TelegramBotService:
             assignment_action(method, assignment_token)
         except Exception:
             logger.exception("Assignment action failed: strategy_id=%s, method=%s, assignment_token=%s.", strategy_id, method, assignment_token)
-
-    def _run_restart_recovery_actions(self) -> None:
-        strategies = getattr(self.engine, "strategy", {}) if self.engine is not None else {}
-        if not isinstance(strategies, dict):
-            logger.error("Restart recovery failed because engine strategies are unavailable.")
-            self.send_message("🚨 Restart recovery failed. Check logs.")
-            return
-
-        matched_strategy_count = 0
-        recovery_failed = False
-        for strategy_id, strategy in strategies.items():
-            get_actions = getattr(strategy, "get_strategy_actions", None)
-            if not callable(get_actions):
-                continue
-            try:
-                strategy_actions = get_actions()
-            except Exception:
-                recovery_failed = True
-                logger.exception("Restart recovery failed because strategy actions are unavailable: strategy_id=%s.", strategy_id)
-                continue
-            if not isinstance(strategy_actions, dict):
-                logger.error("Restart recovery skipped strategy because get_strategy_actions did not return a dict: strategy_id=%s.", strategy_id)
-                continue
-
-            update_maturing_put_strikes = strategy_actions.get("update_maturing_put_strikes")
-            setup_cut_loss_monitor = strategy_actions.get("setup_cut_loss_monitor")
-            if not callable(update_maturing_put_strikes) or not callable(setup_cut_loss_monitor):
-                continue
-
-            matched_strategy_count += 1
-            logger.info("Restart recovery starting: strategy_id=%s, action=update_maturing_put_strikes.", strategy_id)
-            try:
-                updated = update_maturing_put_strikes()
-            except Exception:
-                recovery_failed = True
-                logger.exception("Restart recovery failed: strategy_id=%s, action=update_maturing_put_strikes.", strategy_id)
-            else:
-                if updated is False:
-                    recovery_failed = True
-                    logger.error("Restart recovery failed: strategy_id=%s, action=update_maturing_put_strikes returned False.", strategy_id)
-                else:
-                    logger.info("Restart recovery completed: strategy_id=%s, action=update_maturing_put_strikes.", strategy_id)
-
-            logger.info("Restart recovery starting: strategy_id=%s, action=setup_cut_loss_monitor.", strategy_id)
-            try:
-                setup_cut_loss_monitor()
-            except Exception:
-                recovery_failed = True
-                logger.exception("Restart recovery failed: strategy_id=%s, action=setup_cut_loss_monitor.", strategy_id)
-            else:
-                logger.info("Restart recovery completed: strategy_id=%s, action=setup_cut_loss_monitor.", strategy_id)
-
-        if matched_strategy_count == 0:
-            logger.error("Restart recovery failed because no strategy exposes update_maturing_put_strikes and setup_cut_loss_monitor.")
-            self.send_message("🚨 Restart recovery failed. Check logs.")
-            return
-
-        if recovery_failed:
-            self.send_message("🚨 Restart recovery failed. Check logs.")
-            return
 
     ####################################################################################################
     # Process Control Helpers

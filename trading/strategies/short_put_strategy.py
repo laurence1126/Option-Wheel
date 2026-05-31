@@ -116,6 +116,12 @@ class ShortPutStrategy(TradingStrategyBase):
             "execute_underlying_assignment": self.execute_underlying_assignment,
         }
 
+    def get_restart_actions(self):
+        return {
+            "update_maturing_put_strikes": self.update_maturing_put_strikes,
+            "setup_cut_loss_monitor": self.setup_cut_loss_monitor,
+        }
+
     ####################################################################################################
     # Futu Push Callback Entry Points
     ####################################################################################################
@@ -338,19 +344,19 @@ class ShortPutStrategy(TradingStrategyBase):
     # Cut-Loss Workflow
     ####################################################################################################
 
-    def setup_cut_loss_monitor(self) -> None:
+    def setup_cut_loss_monitor(self) -> bool:
         if self.config.stop_loss_multiple is None or self.config.stop_loss_multiple <= 0:
             logger.warning("Cut-loss monitor disabled because stop_loss_multiple=%s.", self.config.stop_loss_multiple)
             with self.lock:
                 self._cut_loss_watchlist = {}
                 self.trading_status["cut_loss_setup"] = False
-            return
+            return True
 
         if not self.update_put_position():
             logger.warning("Cut-loss monitor setup failed: unable to refresh put positions.")
             with self.lock:
                 self.trading_status["cut_loss_setup"] = False
-            return
+            return False
 
         watchlist = self._build_cut_loss_watchlist()
         if not watchlist:
@@ -358,14 +364,14 @@ class ShortPutStrategy(TradingStrategyBase):
             with self.lock:
                 self._cut_loss_watchlist = {}
                 self.trading_status["cut_loss_setup"] = True
-            return
+            return True
 
         codes = list(watchlist)
         if not self.engine.subscribe(codes, [SubType.QUOTE, SubType.ORDER_BOOK], subscribe_push=True):
             logger.warning("Cut-loss monitor setup failed: unable to subscribe short put positions.")
             with self.lock:
                 self.trading_status["cut_loss_setup"] = False
-            return
+            return False
 
         self._populate_cut_loss_ticks(watchlist)
         with self.lock:
@@ -377,6 +383,7 @@ class ShortPutStrategy(TradingStrategyBase):
             codes,
             {code: watch.stop_price for code, watch in watchlist.items()},
         )
+        return True
 
     def execute_cut_loss(self, watch: CutLossWatch, order_book: dict[str, Any], mid_signal_price: float) -> None:
         if watch.price_tick is None or watch.stop_price is None:

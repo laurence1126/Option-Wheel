@@ -1,6 +1,7 @@
 import unittest
 import threading
 import datetime as dt
+from unittest import mock
 
 import pandas as pd
 from futu import RET_ERROR, RET_OK, TrdEnv, TrdSide
@@ -22,10 +23,12 @@ class FakeTradeContext:
 
 
 class FakeTelegram:
-    def __init__(self, raise_on_start: bool = False) -> None:
+    def __init__(self, raise_on_start: bool = False, enabled: bool = True) -> None:
         self.raise_on_start = raise_on_start
+        self.enabled = enabled
         self.started = False
         self.stopped = False
+        self.messages = []
 
     def start(self, engine) -> None:
         self.started = True
@@ -35,9 +38,23 @@ class FakeTelegram:
     def shutdown(self) -> None:
         self.stopped = True
 
+    def send_message(self, text: str) -> bool:
+        if not self.enabled:
+            return False
+        self.messages.append(text)
+        return True
+
 
 class FakeStrategy(TradingStrategyBase):
-    def __init__(self, strategy_id: str | None = None, raise_on_quote: bool = False) -> None:
+    def __init__(
+        self,
+        strategy_id: str | None = None,
+        raise_on_quote: bool = False,
+        recovery_enabled: bool = False,
+        maturing_result: bool = True,
+        cut_loss_result: bool = True,
+        raise_on_cut_loss: bool = False,
+    ) -> None:
         super().__init__()
         self.strategy_id = strategy_id if strategy_id is not None else "fake"
         self.setup_called = False
@@ -45,6 +62,11 @@ class FakeStrategy(TradingStrategyBase):
         self.quote_calls = []
         self.time_triggers = []
         self.raise_on_quote = raise_on_quote
+        self.recovery_enabled = recovery_enabled
+        self.maturing_result = maturing_result
+        self.cut_loss_result = cut_loss_result
+        self.raise_on_cut_loss = raise_on_cut_loss
+        self.recovery_calls = []
 
     def load_trading_engine(self, engine) -> None:
         super().load_trading_engine(engine)
@@ -60,6 +82,24 @@ class FakeStrategy(TradingStrategyBase):
 
     def on_time_trigger(self, name: str) -> None:
         self.time_triggers.append(name)
+
+    def get_restart_actions(self):
+        if not self.recovery_enabled:
+            return {}
+        return {
+            "update_maturing_put_strikes": self.update_maturing_put_strikes,
+            "setup_cut_loss_monitor": self.setup_cut_loss_monitor,
+        }
+
+    def update_maturing_put_strikes(self) -> bool:
+        self.recovery_calls.append("update_maturing_put_strikes")
+        return self.maturing_result
+
+    def setup_cut_loss_monitor(self) -> bool:
+        self.recovery_calls.append("setup_cut_loss_monitor")
+        if self.raise_on_cut_loss:
+            raise RuntimeError("cut loss failed")
+        return self.cut_loss_result
 
 
 class FakeContext:
@@ -148,9 +188,9 @@ class FutuTradingEngineOrderWrapperTest(unittest.TestCase):
 
         self.assertTrue(cancelled)
 
-    def make_runnable_engine(self, telegram: FakeTelegram) -> tuple[FutuTradingEngine, FakeStrategy]:
+    def make_runnable_engine(self, telegram: FakeTelegram, strategy: FakeStrategy | None = None) -> tuple[FutuTradingEngine, FakeStrategy]:
         engine = object.__new__(FutuTradingEngine)
-        strategy = FakeStrategy()
+        strategy = strategy or FakeStrategy()
         engine._closed = False
         engine._running = False
         engine._time_triggers_configured = False
@@ -184,6 +224,81 @@ class FutuTradingEngineOrderWrapperTest(unittest.TestCase):
         self.assertTrue(telegram.started)
         self.assertTrue(strategy.setup_called)
         self.assertTrue(engine._running)
+
+    def test_run_executes_startup_recovery_once_before_timer_scheduler(self):
+        telegram = FakeTelegram()
+        strategy = FakeStrategy(recovery_enabled=True)
+        engine, strategy = self.make_runnable_engine(telegram, strategy)
+        scheduler_calls = []
+        engine.has_daily_time_trigger = lambda: True
+        engine.start_time_trigger_scheduler = lambda: scheduler_calls.append(list(strategy.recovery_calls))
+
+        engine.run()
+        engine.run()
+
+        self.assertEqual(strategy.recovery_calls, ["update_maturing_put_strikes", "setup_cut_loss_monitor"])
+        self.assertEqual(scheduler_calls, [["update_maturing_put_strikes", "setup_cut_loss_monitor"]])
+
+    def test_run_executes_generic_strategy_restart_action(self):
+        telegram = FakeTelegram()
+        engine, strategy = self.make_runnable_engine(telegram)
+        calls = []
+        strategy.get_restart_actions = lambda: {"restore_custom_state": lambda: calls.append("restore_custom_state")}
+
+        engine.run()
+
+        self.assertEqual(calls, ["restore_custom_state"])
+
+    def test_run_restores_monitoring_when_telegram_start_fails(self):
+        telegram = FakeTelegram(raise_on_start=True)
+        strategy = FakeStrategy(recovery_enabled=True)
+        engine, strategy = self.make_runnable_engine(telegram, strategy)
+
+        engine.run()
+
+        self.assertEqual(strategy.recovery_calls, ["update_maturing_put_strikes", "setup_cut_loss_monitor"])
+        self.assertTrue(engine._running)
+
+    def test_run_restores_monitoring_when_telegram_is_disabled(self):
+        telegram = FakeTelegram(enabled=False)
+        strategy = FakeStrategy(recovery_enabled=True)
+        engine, strategy = self.make_runnable_engine(telegram, strategy)
+
+        engine.run()
+
+        self.assertEqual(strategy.recovery_calls, ["update_maturing_put_strikes", "setup_cut_loss_monitor"])
+        self.assertTrue(engine._running)
+
+    def test_run_keeps_engine_alive_and_warns_when_startup_recovery_fails(self):
+        telegram = FakeTelegram()
+        strategy = FakeStrategy(recovery_enabled=True, maturing_result=False, raise_on_cut_loss=True)
+        engine, strategy = self.make_runnable_engine(telegram, strategy)
+
+        engine.run()
+
+        self.assertEqual(strategy.recovery_calls, ["update_maturing_put_strikes", "setup_cut_loss_monitor"])
+        self.assertEqual(telegram.messages, ["🚨 Startup recovery failed. Check logs."])
+        self.assertTrue(engine._running)
+
+    def test_run_warns_when_cut_loss_monitor_reports_setup_failure(self):
+        telegram = FakeTelegram()
+        strategy = FakeStrategy(recovery_enabled=True, cut_loss_result=False)
+        engine, strategy = self.make_runnable_engine(telegram, strategy)
+
+        engine.run()
+
+        self.assertEqual(strategy.recovery_calls, ["update_maturing_put_strikes", "setup_cut_loss_monitor"])
+        self.assertEqual(telegram.messages, ["🚨 Startup recovery failed. Check logs."])
+        self.assertTrue(engine._running)
+
+    def test_run_skips_startup_recovery_for_strategy_without_recovery_actions(self):
+        telegram = FakeTelegram()
+        engine, strategy = self.make_runnable_engine(telegram)
+
+        engine.run()
+
+        self.assertEqual(strategy.recovery_calls, [])
+        self.assertEqual(telegram.messages, [])
 
     def test_close_stops_telegram_bot_service(self):
         engine = object.__new__(FutuTradingEngine)
@@ -243,11 +358,11 @@ class FutuTradingEngineOrderWrapperTest(unittest.TestCase):
         second = FakeStrategy("beta")
 
         with (
-            unittest.mock.patch("trading.trading_engine.futu_trading_engine.futu_utils.create_quote_context", return_value=FakeContext()),
-            unittest.mock.patch("trading.trading_engine.futu_trading_engine.futu_utils.create_trade_context", return_value=FakeContext()),
-            unittest.mock.patch("trading.trading_engine.futu_trading_engine.futu_utils.get_stock_account", return_value=1),
-            unittest.mock.patch("trading.trading_engine.futu_trading_engine.futu_utils.get_option_account", return_value=2),
-            unittest.mock.patch("trading.trading_engine.futu_trading_engine.futu_utils.get_margin_account", return_value=3),
+            mock.patch("trading.trading_engine.futu_trading_engine.futu_utils.create_quote_context", return_value=FakeContext()),
+            mock.patch("trading.trading_engine.futu_trading_engine.futu_utils.create_trade_context", return_value=FakeContext()),
+            mock.patch("trading.trading_engine.futu_trading_engine.futu_utils.get_stock_account", return_value=1),
+            mock.patch("trading.trading_engine.futu_trading_engine.futu_utils.get_option_account", return_value=2),
+            mock.patch("trading.trading_engine.futu_trading_engine.futu_utils.get_margin_account", return_value=3),
         ):
             engine = FutuTradingEngine([first, second])
 
@@ -306,7 +421,7 @@ class FutuTradingEngineOrderWrapperTest(unittest.TestCase):
         beta = FakeStrategy("beta")
         engine = object.__new__(FutuTradingEngine)
         engine.strategy = {"alpha": alpha, "beta": beta}
-        event = unittest.mock.Mock()
+        event = mock.Mock()
         event.strategy_id = "alpha"
         event.name = "open"
 

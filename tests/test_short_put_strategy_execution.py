@@ -246,6 +246,13 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         trigger = next(item for item in engine.time_triggers if item["name"] == "setup_cut_loss_monitor")
         self.assertEqual(str(trigger["trigger_time"]), "09:20:00")
 
+    def test_restart_actions_refresh_maturing_strikes_before_cut_loss_monitor(self):
+        strategy, _ = self.make_strategy()
+
+        restart_actions = strategy.get_restart_actions()
+
+        self.assertEqual(list(restart_actions), ["update_maturing_put_strikes", "setup_cut_loss_monitor"])
+
     def test_resolve_option_name_handles_simulate_compact_name(self):
         strategy, _ = self.make_strategy()
 
