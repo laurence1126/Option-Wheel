@@ -135,7 +135,15 @@ def _build_notional_chart_html(df: pd.DataFrame) -> str:
     chart_data = (
         df.assign(_CONTRACTS=df["QTY"].abs()).groupby("EXPIRATION").agg(notional=("_NOTIONAL", "sum"), contracts=("_CONTRACTS", "sum")).sort_index()
     )
-    fig = go.Figure(
+    ticker_chart_data = (
+        df.assign(_CONTRACTS=df["QTY"].abs())
+        .reset_index()
+        .groupby(["TICKER", "EXPIRATION"], as_index=False)
+        .agg(notional=("_NOTIONAL", "sum"), contracts=("_CONTRACTS", "sum"))
+        .sort_values(["EXPIRATION", "TICKER"])
+    )
+    fig = go.Figure()
+    fig.add_trace(
         go.Bar(
             x=[pd.Timestamp(expiration).strftime("%m/%d/%y") for expiration in chart_data.index],
             y=chart_data["notional"].values,
@@ -149,9 +157,33 @@ def _build_notional_chart_html(df: pd.DataFrame) -> str:
             hovertemplate="%{customdata[0]}<br>Notional: $%{y:,.0f}<br># of contracts: %{customdata[1]:,.0f}<extra></extra>",
         )
     )
+    fig.add_trace(
+        go.Bar(
+            x=[
+                f"{ticker}<br>{pd.Timestamp(expiration).strftime('%m/%d/%y')}"
+                for ticker, expiration in zip(ticker_chart_data["TICKER"], ticker_chart_data["EXPIRATION"], strict=True)
+            ],
+            y=ticker_chart_data["notional"].values,
+            visible=False,
+            marker_color="#60a5fa",
+            text=[f"${notional:,.0f}" for notional in ticker_chart_data["notional"].values],
+            textposition="outside",
+            customdata=[
+                [ticker, pd.Timestamp(expiration).strftime("%Y-%m-%d"), int(contracts)]
+                for ticker, expiration, contracts in zip(
+                    ticker_chart_data["TICKER"],
+                    ticker_chart_data["EXPIRATION"],
+                    ticker_chart_data["contracts"],
+                    strict=True,
+                )
+            ],
+            hovertemplate="%{customdata[0]}<br>%{customdata[1]}<br>Notional: $%{y:,.0f}<br># of contracts: %{customdata[2]:,.0f}<extra></extra>",
+        )
+    )
     fig.update_layout(
         autosize=True,
         dragmode=False,
+        showlegend=False,
         height=380,
         hoverlabel={"bgcolor": "#111111", "bordercolor": "#60a5fa", "font": {"color": "#e5e7eb"}},
         margin={"l": 70, "r": 24, "t": 24, "b": 64},

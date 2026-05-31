@@ -286,14 +286,14 @@
               </table>
             </div>
 
-            <div class="chart">
-              <h2>Option Notional by Expiration</h2>
+            <div class="chart notional-chart">
+              <h2><button class="chart-title-toggle notional-chart-toggle" type="button" aria-pressed="false">Option Notional by Expiration</button></h2>
               {{ chart_html | safe }}
             </div>
 
             {% if pnl_chart_html %}
               <div class="chart pnl-chart">
-                <h2><button class="chart-title-toggle" type="button" aria-pressed="true">Option PnL by Ticker / Expiration (%)</button></h2>
+                <h2><button class="chart-title-toggle pnl-chart-toggle" type="button" aria-pressed="true">Option PnL by Ticker / Expiration (%)</button></h2>
                 {{ pnl_chart_html | safe }}
               </div>
             {% endif %}
@@ -321,8 +321,10 @@
       const report = reportWrapper.querySelector("main");
       const phoneLayout = window.matchMedia("(max-width: 540px)");
       const sortableTable = document.querySelector(".sortable-table");
+      const notionalChart = document.querySelector(".notional-chart .plotly-graph-div");
+      const notionalChartToggle = document.querySelector(".notional-chart-toggle");
       const pnlChart = document.querySelector(".pnl-chart .plotly-graph-div");
-      const pnlChartToggle = document.querySelector(".chart-title-toggle");
+      const pnlChartToggle = document.querySelector(".pnl-chart-toggle");
 
       function fitReportToPhone() {
         report.style.transform = "";
@@ -428,6 +430,18 @@
 
       sortableTable?.querySelectorAll(".sort-button").forEach((button) => {
         button.addEventListener("click", () => sortTable(button));
+      });
+
+      notionalChartToggle?.addEventListener("click", () => {
+        const showTicker = notionalChartToggle.getAttribute("aria-pressed") !== "true";
+        notionalChartToggle.setAttribute("aria-pressed", String(showTicker));
+        notionalChartToggle.textContent = showTicker
+          ? "Option Notional by Ticker / Expiration"
+          : "Option Notional by Expiration";
+        Plotly.restyle(notionalChart, "visible", [!showTicker, showTicker]);
+        Plotly.relayout(notionalChart, {
+          "xaxis.title.text": showTicker ? "Ticker / Expiration" : "Expiration Date",
+        });
       });
 
       pnlChartToggle?.addEventListener("click", () => {
