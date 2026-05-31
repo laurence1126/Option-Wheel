@@ -21,9 +21,13 @@
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
 
-      main {
+      .report-wrapper {
         width: min(1040px, 100%);
         margin: 0 auto;
+      }
+
+      main {
+        width: 100%;
         overflow: hidden;
         border: 1.5px solid #2f2f2f;
         border-radius: 20px;
@@ -51,7 +55,7 @@
 
       h1 {
         color: #f3f4f6;
-        font-size: clamp(24px, 6vw, 36px);
+        font-size: 36px;
         line-height: 1;
       }
 
@@ -175,74 +179,100 @@
 
       @media (max-width: 540px) {
         body {
-          padding: 14px;
+          padding: 8px;
         }
 
-        header {
-          padding: 24px 20px;
+        .report-wrapper {
+          width: 100%;
         }
 
-        section {
-          padding: 16px;
+        main {
+          width: 1040px;
+          transform-origin: top left;
         }
       }
     </style>
   </head>
   <body>
-    <main>
-      <header>
-        <h1>{{ title }}</h1>
-        <h3 class="date">Date: {{ date }}</h3>
-      </header>
+    <div class="report-wrapper">
+      <main>
+        <header>
+          <h1>{{ title }}</h1>
+          <h3 class="date">Date: {{ date }}</h3>
+        </header>
 
-      <section{% if error_message %} class="error"{% endif %}>
-        {% if error_message %}
-          <p>{{ error_message }}</p>
-        {% elif rows %}
-          <h2>Open Short Put Positions</h2>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Ticker</th>
-                  {% for column in columns %}
-                    <th>{{ column }}</th>
-                  {% endfor %}
-                </tr>
-              </thead>
-              <tbody>
-                {% for row in rows %}
-                  <tr class="{{ row.status }}">
-                    <td><a href="{{ row.ticker_url }}" target="_blank" rel="noopener noreferrer">{{ row.ticker }}</a></td>
-                    {% for cell in row.cells %}
-                      <td{% if cell.status %} class="{{ cell.status }}"{% endif %}>{{ cell.text }}</td>
+        <section{% if error_message %} class="error"{% endif %}>
+          {% if error_message %}
+            <p>{{ error_message }}</p>
+          {% elif rows %}
+            <h2>Open Short Put Positions</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Ticker</th>
+                    {% for column in columns %}
+                      <th>{{ column }}</th>
                     {% endfor %}
                   </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {% for row in rows %}
+                    <tr class="{{ row.status }}">
+                      <td><a href="{{ row.ticker_url }}" target="_blank" rel="noopener noreferrer">{{ row.ticker }}</a></td>
+                      {% for cell in row.cells %}
+                        <td{% if cell.status %} class="{{ cell.status }}"{% endif %}>{{ cell.text }}</td>
+                      {% endfor %}
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
 
-          <div class="chart">
-            <h2>Option Notional by Expiration</h2>
-            {{ chart_html | safe }}
-          </div>
+            <div class="chart">
+              <h2>Option Notional by Expiration</h2>
+              {{ chart_html | safe }}
+            </div>
 
-          <div class="summary">
-            {% if current_bp %}
-              Current available cash: <strong>${{ current_bp }}</strong><br>
-            {% endif %}
-            Total BP required (worst case): <strong class="{{ bp_status }}">${{ total_bp }}</strong>
-            {% if leverage_ratio %}
-              <br>Leverage ratio (worst case): <strong class="{{ bp_status }}">{{ leverage_ratio }}</strong>
-            {% endif %}
-          </div>
-          <p class="note">Prices are based on recent closing data from Yahoo Finance. Units in USD.</p>
-        {% else %}
-          <h2>Open Short Put Positions</h2>
-          <p class="empty">No open short put positions were found.</p>
-        {% endif %}
-      </section>
-    </main>
+            <div class="summary">
+              {% if current_bp %}
+                Current available cash: <strong>${{ current_bp }}</strong><br>
+              {% endif %}
+              Total BP required (worst case): <strong class="{{ bp_status }}">${{ total_bp }}</strong>
+              {% if leverage_ratio %}
+                <br>Leverage ratio (worst case): <strong class="{{ bp_status }}">{{ leverage_ratio }}</strong>
+              {% endif %}
+            </div>
+            <p class="note">Prices are based on recent closing data from Yahoo Finance. Units in USD.</p>
+          {% else %}
+            <h2>Open Short Put Positions</h2>
+            <p class="empty">No open short put positions were found.</p>
+          {% endif %}
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const reportWrapper = document.querySelector(".report-wrapper");
+      const report = reportWrapper.querySelector("main");
+      const phoneLayout = window.matchMedia("(max-width: 540px)");
+
+      function fitReportToPhone() {
+        report.style.transform = "";
+        reportWrapper.style.height = "";
+
+        if (!phoneLayout.matches) {
+          return;
+        }
+
+        const scale = Math.min(1, reportWrapper.clientWidth / report.offsetWidth);
+        report.style.transform = `scale(${scale})`;
+        reportWrapper.style.height = `${report.offsetHeight * scale}px`;
+      }
+
+      fitReportToPhone();
+      window.addEventListener("load", fitReportToPhone);
+      window.addEventListener("resize", fitReportToPhone);
+    </script>
   </body>
 </html>
