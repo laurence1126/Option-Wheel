@@ -429,7 +429,6 @@ class TelegramBotService:
                 timeout_seconds=self.poll_timeout_seconds,
             )
             if updates is None:
-                logger.warning("Telegram polling failed. If this is HTTP 409 Conflict, stop other getUpdates pollers using the same bot token.")
                 self._shutdown_event.wait(self.error_backoff_seconds)
                 continue
 
