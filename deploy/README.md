@@ -37,7 +37,7 @@ Run these commands from the repository root as your normal Ubuntu login:
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirement.txt
+.venv/bin/python -m pip install -r requirements.txt
 sudo deploy/install-systemd.sh "$USER" "$PWD"
 ```
 
