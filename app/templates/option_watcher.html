@@ -119,6 +119,37 @@
         text-align: left;
       }
 
+      .sort-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-end;
+        width: 100%;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+        letter-spacing: inherit;
+        text-transform: inherit;
+      }
+
+      th:first-child .sort-button {
+        justify-content: flex-start;
+      }
+
+      .sort-indicator {
+        display: none;
+        width: 16px;
+        margin-left: 4px;
+        text-align: center;
+      }
+
+      th[aria-sort="ascending"] .sort-indicator,
+      th[aria-sort="descending"] .sort-indicator {
+        display: inline-block;
+      }
+
       tr:last-child td {
         border-bottom: 0;
       }
@@ -212,21 +243,29 @@
           {% elif rows %}
             <h2>Open Short Put Positions</h2>
             <div class="table-wrap">
-              <table>
+              <table class="sortable-table">
                 <thead>
                   <tr>
-                    <th>Ticker</th>
+                    <th aria-sort="none">
+                      <button class="sort-button" type="button" data-sort-column="0" data-sort-name="TICKER">
+                        Ticker <span class="sort-indicator" aria-hidden="true">&#8597;</span>
+                      </button>
+                    </th>
                     {% for column in columns %}
-                      <th>{{ column }}</th>
+                      <th aria-sort="{% if column == 'PCT EXEC' %}descending{% else %}none{% endif %}">
+                        <button class="sort-button" type="button" data-sort-column="{{ loop.index }}" data-sort-name="{{ column }}">
+                          {{ column }} <span class="sort-indicator" aria-hidden="true">{% if column == "PCT EXEC" %}&#8595;{% else %}&#8597;{% endif %}</span>
+                        </button>
+                      </th>
                     {% endfor %}
                   </tr>
                 </thead>
                 <tbody>
                   {% for row in rows %}
                     <tr class="{{ row.status }}">
-                      <td><a href="{{ row.ticker_url }}" target="_blank" rel="noopener noreferrer">{{ row.ticker }}</a></td>
+                      <td data-sort-value="{{ row.ticker }}"><a href="{{ row.ticker_url }}" target="_blank" rel="noopener noreferrer">{{ row.ticker }}</a></td>
                       {% for cell in row.cells %}
-                        <td{% if cell.status %} class="{{ cell.status }}"{% endif %}>{{ cell.text }}</td>
+                        <td data-sort-value="{{ cell.sort_value }}"{% if cell.status %} class="{{ cell.status }}"{% endif %}>{{ cell.text }}</td>
                       {% endfor %}
                     </tr>
                   {% endfor %}
@@ -261,6 +300,7 @@
       const reportWrapper = document.querySelector(".report-wrapper");
       const report = reportWrapper.querySelector("main");
       const phoneLayout = window.matchMedia("(max-width: 540px)");
+      const sortableTable = document.querySelector(".sortable-table");
 
       function fitReportToPhone() {
         report.style.transform = "";
@@ -274,6 +314,99 @@
         report.style.transform = `scale(${scale})`;
         reportWrapper.style.height = `${report.offsetHeight * scale}px`;
       }
+
+      function compareSortValues(left, right) {
+        if (left === right) {
+          return 0;
+        }
+        if (left === "") {
+          return 1;
+        }
+        if (right === "") {
+          return -1;
+        }
+
+        const leftNumber = Number(left);
+        const rightNumber = Number(right);
+        if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+          return leftNumber - rightNumber;
+        }
+        return left.localeCompare(right, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+      }
+
+      function updateNeutralRowColors(rows) {
+        rows.forEach((row, index) => {
+          if (
+            row.classList.contains("neutral") ||
+            row.classList.contains("neutral-alt")
+          ) {
+            row.classList.toggle("neutral", index % 2 === 0);
+            row.classList.toggle("neutral-alt", index % 2 !== 0);
+          }
+        });
+      }
+
+      function sortTable(button) {
+        const columnIndex = Number(button.dataset.sortColumn);
+        const selectedHeader = button.closest("th");
+        const direction =
+          selectedHeader.getAttribute("aria-sort") === "ascending"
+            ? "descending"
+            : "ascending";
+        const directionMultiplier = direction === "ascending" ? 1 : -1;
+        const body = sortableTable.querySelector("tbody");
+        const rows = Array.from(body.querySelectorAll("tr"));
+        const tieBreakerColumnIndexes = ["TICKER", "DTE", "STRIKE"]
+          .map(
+            (columnName) =>
+              sortableTable.querySelector(
+                `.sort-button[data-sort-name="${columnName}"]`,
+              )?.dataset.sortColumn,
+          )
+          .filter((columnIndex) => columnIndex !== undefined)
+          .map(Number);
+
+        rows
+          .map((row, originalIndex) => ({ row, originalIndex }))
+          .sort((left, right) => {
+            const leftValue =
+              left.row.cells[columnIndex].dataset.sortValue ?? "";
+            const rightValue =
+              right.row.cells[columnIndex].dataset.sortValue ?? "";
+            const comparison = compareSortValues(leftValue, rightValue);
+            if (comparison !== 0) {
+              return comparison * directionMultiplier;
+            }
+
+            for (const tieBreakerColumnIndex of tieBreakerColumnIndexes) {
+              const tieBreakerComparison = compareSortValues(
+                left.row.cells[tieBreakerColumnIndex].dataset.sortValue ?? "",
+                right.row.cells[tieBreakerColumnIndex].dataset.sortValue ?? "",
+              );
+              if (tieBreakerComparison !== 0) {
+                return tieBreakerComparison;
+              }
+            }
+            return left.originalIndex - right.originalIndex;
+          })
+          .forEach(({ row }) => body.appendChild(row));
+
+        sortableTable.querySelectorAll("th").forEach((header) => {
+          header.setAttribute("aria-sort", "none");
+          header.querySelector(".sort-indicator").textContent = "\u2195";
+        });
+        selectedHeader.setAttribute("aria-sort", direction);
+        selectedHeader.querySelector(".sort-indicator").textContent =
+          direction === "ascending" ? "\u2191" : "\u2193";
+        updateNeutralRowColors(Array.from(body.querySelectorAll("tr")));
+      }
+
+      sortableTable?.querySelectorAll(".sort-button").forEach((button) => {
+        button.addEventListener("click", () => sortTable(button));
+      });
 
       fitReportToPhone();
       window.addEventListener("load", fitReportToPhone);

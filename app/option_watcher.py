@@ -118,7 +118,7 @@ def _build_watcher_row(index: int, ticker: object, row: pd.Series, visible_colum
         cell_status = None
         if column == "CLOSE":
             cell_status = "down" if value < row["_PREV CLOSE"] else "up"
-        cells.append({"status": cell_status, "text": fmt(column, value)})
+        cells.append({"status": cell_status, "text": fmt(column, value), "sort_value": value})
 
     ticker_text = str(ticker)
     return {
@@ -131,10 +131,7 @@ def _build_watcher_row(index: int, ticker: object, row: pd.Series, visible_colum
 
 def _build_notional_chart_html(df: pd.DataFrame) -> str:
     chart_data = (
-        df.assign(_CONTRACTS=df["QTY"].abs())
-        .groupby("EXPIRATION")
-        .agg(notional=("_NOTIONAL", "sum"), contracts=("_CONTRACTS", "sum"))
-        .sort_index()
+        df.assign(_CONTRACTS=df["QTY"].abs()).groupby("EXPIRATION").agg(notional=("_NOTIONAL", "sum"), contracts=("_CONTRACTS", "sum")).sort_index()
     )
     fig = go.Figure(
         go.Bar(

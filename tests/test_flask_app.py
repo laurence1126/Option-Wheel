@@ -59,6 +59,10 @@ class FlaskAppTest(unittest.TestCase):
         self.assertIn(b"background: #1b1b1b", response.data)
         self.assertIn(b"background: #183a2f", response.data)
         self.assertIn(b"background: #3a1f2a", response.data)
+        self.assertIn(b'class="sortable-table"', response.data)
+        self.assertIn(b'data-sort-column="0"', response.data)
+        self.assertIn(b'data-sort-value="98.59"', response.data)
+        self.assertIn(b'aria-sort="descending"', response.data)
 
     def test_option_watcher_page_handles_empty_position_list(self) -> None:
         app = create_app(watcher_data_loader=lambda: (pd.DataFrame(), 100_000.0))
