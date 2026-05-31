@@ -1,0 +1,10 @@
+[Unit]
+Description=Restart Option Wheel Trading Engine Weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00 America/New_York
+Persistent=true
+Unit=option-wheel-weekly-restart.service
+
+[Install]
+WantedBy=timers.target

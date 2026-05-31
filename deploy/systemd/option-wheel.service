@@ -1,0 +1,19 @@
+[Unit]
+Description=Option Wheel Trading Engine
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+WorkingDirectory=@APP_DIR@
+ExecStart="@APP_DIR@/.venv/bin/python" -m trading.main
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=120
+KillSignal=SIGTERM
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

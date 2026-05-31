@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart Option Wheel Trading Engine
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart option-wheel.service
