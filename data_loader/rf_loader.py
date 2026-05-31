@@ -20,7 +20,7 @@ def load_rf_rates(
         supported = ", ".join(SUPPORTED_RISK_FREE_SERIES)
         raise ValueError(f"Unsupported rf series {series!r}. Choose one of: {supported}.")
 
-    path = Path(cache_path) if cache_path is not None else Path(data_root) / "risk_free" / f"{series}.csv"
+    path = Path(cache_path) if cache_path is not None else Path(data_root) / "market" / f"{series}.csv"
     if refresh or not path.exists():
         frame = pd.read_csv(f"{FRED_GRAPH_URL}?id={series}")
         path.parent.mkdir(parents=True, exist_ok=True)

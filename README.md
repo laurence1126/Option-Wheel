@@ -32,9 +32,8 @@ The project loads local monthly CSV files, selects short puts and covered calls 
 │   └── fetch_option_data.py # IVolatility data fetch helper
 ├── run_backtest.ipynb       # Notebook workflow
 └── data/
-    ├── risk_free/
-    │   └── DGS3MO.csv       # Cached FRED rf series
     ├── market/
+    │   ├── DGS3MO.csv       # Cached FRED rf series
     │   └── VIXCLS.csv       # Cached FRED VIX series
     └── SYMBOL/
         └── YYYY-MM.csv      # Historical option-chain data
@@ -112,7 +111,7 @@ weekday_cash_flow_fig, weekday_cash_flow_table = report.plot_cash_flow_by_expira
 | `leverage`             |      `1.0` | Cash multiplier used when checking put strike notional capacity.                                                                                                                                                                                                             |
 | `rf_series`            | `"DGS3MO"` | FRED short-rate series used for cash interest. Supported values: `DGS1MO`, `DGS3MO`, `DGS6MO`, `DTB3`, `EFFR`, `SOFR`.                                                                                                                                                       |
 | `rf_penalty_multiple`  |     `0.85` | Haircut applied to the selected rf series before cash interest accrues. Example: if `DGS3MO` is 5%, `0.85` makes cash earn 4.25%.                                                                                                                                            |
-| `rf_path`              |     `None` | Optional local CSV path for historical rates. Defaults to `data/risk_free/{rf_series}.csv`.                                                                                                                                                                                  |
+| `rf_path`              |     `None` | Optional local CSV path for historical rates. Defaults to `data/market/{rf_series}.csv`.                                                                                                                                                                                     |
 | `refresh_rf`           |    `False` | If `True`, re-download the selected rate series from FRED and update the local cache.                                                                                                                                                                                        |
 | `target_delta`         |     `0.15` | Target absolute option delta for put/call selection.                                                                                                                                                                                                                         |
 | `put_exp_days`         |       `25` | Minimum DTE for short put selection.                                                                                                                                                                                                                                         |
@@ -176,7 +175,7 @@ DGS1MO, DGS3MO, DGS6MO, DTB3, EFFR, SOFR
 On first use, the loader downloads and caches the selected series at:
 
 ```text
-data/risk_free/{series}.csv
+data/market/{series}.csv
 ```
 
 The daily cash yield calculation is:
