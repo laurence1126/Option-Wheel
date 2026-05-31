@@ -1,6 +1,24 @@
+import socket
+import psutil
+
+
+def get_host(prefix: str) -> str:
+    for addresses in psutil.net_if_addrs().values():
+        for address in addresses:
+            if address.family == socket.AF_INET and address.address.startswith(prefix):
+                return address.address
+    raise ValueError(f"No IPv4 host address starts with {prefix!r}.")
+
+
+def get_option_watcher_url() -> str:
+    host = get_host("100")
+    return f"http://{host}:5001/option-watcher"
+
+
 BOT_COMMANDS = [
     {"command": "status", "description": "📊 Show trading engine status"},
     {"command": "log", "description": "📝 Send latest log file"},
+    {"command": "watcher", "description": "📲 Open option watcher app"},
     {"command": "shortput", "description": "💸 Run short put strategy now"},
     {"command": "restart", "description": "🔄 Restart trading engine"},
     {"command": "shutdown", "description": "⛔️ Shutdown trading engine"},
@@ -14,6 +32,7 @@ HELP_TEXT = (
     "/start - Say hello to Quant Bot!\n"
     "/status - Show the trading engine status\n"
     "/log - Send the latest log file\n"
+    "/watcher - Open the option watcher app\n"
     "/shortput - Run the short put strategy\n"
     "/restart - Restart the trading engine\n"
     "/shutdown - Shutdown the trading engine"

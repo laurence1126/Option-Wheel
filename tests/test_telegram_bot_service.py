@@ -2,12 +2,14 @@ import threading
 import time
 import unittest
 import datetime as dt
+import socket
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
 
 from trading.notification.telegram_bot import PendingShortPut, RESTART_ENV_VAR, TelegramBotService
-from trading.notification.telegram_consts import BOT_COMMANDS, HELP_TEXT
+from trading.notification.telegram_consts import BOT_COMMANDS, HELP_TEXT, get_host, get_option_watcher_url
 from trading.notification.telegram_summary import (
     build_assignment_summary,
     build_cut_loss_summary,
@@ -121,7 +123,7 @@ class TelegramBotServiceTest(unittest.TestCase):
             self.assertIs(set_commands.call_args.args[0], config)
             self.assertEqual(
                 [command["command"] for command in set_commands.call_args.args[1]],
-                ["status", "log", "shortput", "restart", "shutdown", "help", "start"],
+                ["status", "watcher", "log", "shortput", "restart", "shutdown", "help", "start"],
             )
             set_menu.assert_called_once_with(config)
             service.shutdown()
@@ -129,6 +131,27 @@ class TelegramBotServiceTest(unittest.TestCase):
     def test_command_consts_include_shortput(self):
         self.assertIn("shortput", [command["command"] for command in BOT_COMMANDS])
         self.assertIn("/shortput - Run the short put strategy", HELP_TEXT)
+
+    def test_command_consts_include_watcher(self):
+        self.assertIn("watcher", [command["command"] for command in BOT_COMMANDS])
+        self.assertIn("/watcher - Open the option watcher app", HELP_TEXT)
+
+    def test_get_host_returns_ipv4_address_matching_prefix(self):
+        addresses = {
+            "en0": [SimpleNamespace(family=socket.AF_INET, address="192.168.1.10")],
+            "utun4": [SimpleNamespace(family=socket.AF_INET, address="100.99.21.101")],
+        }
+
+        with patch("trading.notification.telegram_consts.psutil.net_if_addrs", return_value=addresses):
+            self.assertEqual(get_host("100"), "100.99.21.101")
+            self.assertEqual(get_option_watcher_url(), "http://100.99.21.101:5001/option-watcher")
+
+    def test_get_host_raises_when_prefix_is_unavailable(self):
+        addresses = {"en0": [SimpleNamespace(family=socket.AF_INET, address="192.168.1.10")]}
+
+        with patch("trading.notification.telegram_consts.psutil.net_if_addrs", return_value=addresses):
+            with self.assertRaisesRegex(ValueError, "No IPv4 host address starts with '100'"):
+                get_host("100")
 
     def test_start_sends_restarted_message_after_exec_restart(self):
         service = self.make_service()
@@ -217,6 +240,50 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.assertIn("Trading engine connected", send_message.call_args.args[1])
         self.assertIn("Duration: 00:01:", send_message.call_args.args[1])
         self.assertIn("short_put: FakeStrategy", send_message.call_args.args[1])
+
+    def test_watcher_command_sends_option_watcher_link(self):
+        service = self.make_service()
+        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.enabled = True
+
+        with (
+            patch("trading.notification.telegram_bot.get_option_watcher_url", return_value="http://100.99.21.101:5001/option-watcher"),
+            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
+        ):
+            service._handle_message({"chat": {"id": "123"}, "text": "/watcher"})
+
+        send_message.assert_called_once_with(
+            service.config,
+            "Click the button below:",
+            reply_markup={
+                "inline_keyboard": [
+                    [{"text": "📲 Open Option Watcher", "url": "http://100.99.21.101:5001/option-watcher"}]
+                ]
+            },
+        )
+
+    def test_watcher_command_reports_unavailable_host(self):
+        service = self.make_service()
+        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.enabled = True
+
+        with (
+            patch("trading.notification.telegram_bot.get_option_watcher_url", side_effect=ValueError("missing")),
+            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
+        ):
+            service._handle_message({"chat": {"id": "123"}, "text": "/watcher"})
+
+        send_message.assert_called_once_with(service.config, "Option watcher unavailable.")
+
+    def test_watcher_command_ignores_disallowed_chat(self):
+        service = self.make_service()
+        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.enabled = True
+
+        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service._handle_message({"chat": {"id": "999"}, "text": "/watcher"})
+
+        send_message.assert_not_called()
 
     def test_shutdown_command_requests_inline_confirmation_without_closing_engine(self):
         service = self.make_service()

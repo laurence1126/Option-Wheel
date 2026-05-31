@@ -10,6 +10,11 @@
         box-sizing: border-box;
       }
 
+      html {
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+      }
+
       body {
         margin: 0;
         padding: 24px;
@@ -236,14 +241,14 @@
 
             <div class="summary">
               {% if current_bp %}
-                Current available cash: <strong>${{ current_bp }}</strong><br>
+                Available Cash: <strong>${{ current_bp }}</strong><br>
               {% endif %}
-              Total BP required (worst case): <strong class="{{ bp_status }}">${{ total_bp }}</strong>
+              Total BP Required: <strong class="{{ bp_status }}">${{ total_bp }}</strong>
               {% if leverage_ratio %}
-                <br>Leverage ratio (worst case): <strong class="{{ bp_status }}">{{ leverage_ratio }}</strong>
+                <br>Leverage Ratio: <strong class="{{ bp_status }}">{{ leverage_ratio }}</strong>
               {% endif %}
             </div>
-            <p class="note">Prices are based on recent closing data from Yahoo Finance. Units in USD.</p>
+            <p class="note">Relevant data is based on the latest closing prices from Yahoo Finance. Units in USD.</p>
           {% else %}
             <h2>Open Short Put Positions</h2>
             <p class="empty">No open short put positions were found.</p>
