@@ -1,9 +1,6 @@
 import unittest
 import datetime as dt
-import subprocess
-import sys
 import threading
-from pathlib import Path
 from unittest import mock
 
 import pandas as pd
@@ -46,6 +43,21 @@ class FakeTelegram:
             return False
         self.messages.append(text)
         return True
+
+
+class FakeFlaskApp:
+    def __init__(self, raise_on_start: bool = False) -> None:
+        self.raise_on_start = raise_on_start
+        self.started = False
+        self.stopped = False
+
+    def start(self) -> None:
+        self.started = True
+        if self.raise_on_start:
+            raise RuntimeError("app failed")
+
+    def shutdown(self) -> None:
+        self.stopped = True
 
 
 class FakeStrategy(TradingStrategyBase):
@@ -191,7 +203,12 @@ class FutuTradingEngineOrderWrapperTest(unittest.TestCase):
 
         self.assertTrue(cancelled)
 
-    def make_runnable_engine(self, telegram: FakeTelegram, strategy: FakeStrategy | None = None) -> tuple[FutuTradingEngine, FakeStrategy]:
+    def make_runnable_engine(
+        self,
+        telegram: FakeTelegram,
+        strategy: FakeStrategy | None = None,
+        flask_app: FakeFlaskApp | None = None,
+    ) -> tuple[FutuTradingEngine, FakeStrategy]:
         engine = object.__new__(FutuTradingEngine)
         strategy = strategy or FakeStrategy()
         engine._closed = False
@@ -199,13 +216,13 @@ class FutuTradingEngineOrderWrapperTest(unittest.TestCase):
         engine._time_triggers_configured = False
         engine._active_setup_strategy_id = None
         engine.telegram = telegram
+        engine.flask_app = flask_app or FakeFlaskApp()
         engine.strategy = {"fake": strategy}
         engine.unlock_trade = lambda: True
         engine.set_order_handlers = lambda: None
         engine.set_trade_handlers = lambda: None
         engine.has_daily_time_trigger = lambda: False
         engine.start_time_trigger_scheduler = lambda: None
-        engine.start_app_server = lambda: None
         return engine, strategy
 
     def test_run_starts_telegram_bot_service(self):
@@ -221,18 +238,17 @@ class FutuTradingEngineOrderWrapperTest(unittest.TestCase):
 
     def test_run_starts_option_watcher_app_server(self):
         telegram = FakeTelegram()
-        engine, _ = self.make_runnable_engine(telegram)
-        app_start_calls = []
-        engine.start_app_server = lambda: app_start_calls.append(True)
+        flask_app = FakeFlaskApp()
+        engine, _ = self.make_runnable_engine(telegram, flask_app=flask_app)
 
         engine.run()
 
-        self.assertEqual(app_start_calls, [True])
+        self.assertTrue(flask_app.started)
 
     def test_run_continues_when_option_watcher_app_start_fails(self):
         telegram = FakeTelegram()
-        engine, strategy = self.make_runnable_engine(telegram)
-        engine.start_app_server = mock.Mock(side_effect=RuntimeError("app failed"))
+        flask_app = FakeFlaskApp(raise_on_start=True)
+        engine, strategy = self.make_runnable_engine(telegram, flask_app=flask_app)
 
         engine.run()
 
@@ -338,58 +354,16 @@ class FutuTradingEngineOrderWrapperTest(unittest.TestCase):
         engine.quote_context = quote_context
         engine.trade_context = trade_context
         engine.telegram = telegram
-        app_stop_calls = []
-        engine.stop_app_server = lambda: app_stop_calls.append(True)
+        flask_app = FakeFlaskApp()
+        engine.flask_app = flask_app
 
         engine.close()
 
         self.assertTrue(telegram.stopped)
-        self.assertEqual(app_stop_calls, [True])
+        self.assertTrue(flask_app.stopped)
         self.assertTrue(quote_context.closed)
         self.assertTrue(trade_context.closed)
         self.assertIsNone(engine._started_at)
-
-    def test_start_app_server_launches_app_module_once(self):
-        engine = object.__new__(FutuTradingEngine)
-        engine._app_process = None
-        process = mock.Mock()
-        process.pid = 123
-        process.poll.return_value = None
-
-        with mock.patch("trading.trading_engine.futu_trading_engine.subprocess.Popen", return_value=process) as popen:
-            engine.start_app_server()
-            engine.start_app_server()
-
-        popen.assert_called_once_with(
-            [sys.executable, "-m", "app.main"],
-            cwd=Path(__file__).resolve().parents[1],
-        )
-
-    def test_stop_app_server_terminates_running_process(self):
-        engine = object.__new__(FutuTradingEngine)
-        process = mock.Mock()
-        process.poll.return_value = None
-        engine._app_process = process
-
-        engine.stop_app_server()
-
-        process.terminate.assert_called_once_with()
-        process.wait.assert_called_once_with(timeout=5)
-        self.assertIsNone(engine._app_process)
-
-    def test_stop_app_server_kills_process_that_does_not_terminate(self):
-        engine = object.__new__(FutuTradingEngine)
-        process = mock.Mock()
-        process.poll.return_value = None
-        process.wait.side_effect = [subprocess.TimeoutExpired("app.main", 5), None]
-        engine._app_process = process
-
-        engine.stop_app_server()
-
-        process.terminate.assert_called_once_with()
-        process.kill.assert_called_once_with()
-        self.assertEqual(process.wait.call_args_list, [mock.call(timeout=5), mock.call(timeout=5)])
-        self.assertIsNone(engine._app_process)
 
     def test_normalize_strategy_input_defaults_to_base_strategy(self):
         strategy = FutuTradingEngine._normalize_strategy_input(None)
