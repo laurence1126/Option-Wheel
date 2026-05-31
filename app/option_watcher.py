@@ -53,7 +53,7 @@ def get_watcher_data() -> tuple[pd.DataFrame, float | None]:
                     "PCT EXEC": strike / close * 100,
                     "_PREV CLOSE": previous_close,
                     "_NOTIONAL": abs(qty * strike * 100),
-                    "_PNL": float(position["unrealized_pl"]) + float(position["realized_pl"]),
+                    "_PNL": float(position["unrealized_pl"]),
                 }
             )
         if not rows:
@@ -174,13 +174,21 @@ def _build_notional_chart_html(df: pd.DataFrame) -> str:
 
 
 def _build_pnl_chart_html(df: pd.DataFrame) -> str:
-    chart_data = df.reset_index().groupby(["TICKER", "EXPIRATION"], as_index=False).agg(pnl=("_PNL", "sum")).sort_values(["EXPIRATION", "TICKER"])
-    fig = go.Figure(
+    chart_data = (
+        df.reset_index()
+        .groupby(["TICKER", "EXPIRATION"], as_index=False)
+        .agg(pnl=("_PNL", "sum"), premium=("PREMIUM", "sum"))
+        .sort_values(["EXPIRATION", "TICKER"])
+    )
+    chart_data["pnl_pct"] = chart_data["pnl"].div(chart_data["premium"].replace(0, np.nan)).mul(100)
+    x_values = [
+        f"{ticker}<br>{pd.Timestamp(expiration).strftime('%m/%d/%y')}"
+        for ticker, expiration in zip(chart_data["TICKER"], chart_data["EXPIRATION"], strict=True)
+    ]
+    fig = go.Figure()
+    fig.add_trace(
         go.Bar(
-            x=[
-                f"{ticker}<br>{pd.Timestamp(expiration).strftime('%m/%d/%y')}"
-                for ticker, expiration in zip(chart_data["TICKER"], chart_data["EXPIRATION"], strict=True)
-            ],
+            x=x_values,
             y=chart_data["pnl"].values,
             marker_color=["#22c55e" if pnl >= 0 else "#ef4444" for pnl in chart_data["pnl"].values],
             text=[f"${pnl:,.0f}" for pnl in chart_data["pnl"].values],
@@ -192,9 +200,25 @@ def _build_pnl_chart_html(df: pd.DataFrame) -> str:
             hovertemplate="%{customdata[0]}<br>%{customdata[1]}<br>PnL: $%{y:,.2f}<extra></extra>",
         )
     )
+    fig.add_trace(
+        go.Bar(
+            x=x_values,
+            y=chart_data["pnl_pct"].values,
+            visible=False,
+            marker_color=["#22c55e" if pnl_pct >= 0 else "#ef4444" for pnl_pct in chart_data["pnl_pct"].values],
+            text=[f"{pnl_pct:,.1f}%" if pd.notna(pnl_pct) else "" for pnl_pct in chart_data["pnl_pct"].values],
+            textposition="outside",
+            customdata=[
+                [ticker, pd.Timestamp(expiration).strftime("%Y-%m-%d")]
+                for ticker, expiration in zip(chart_data["TICKER"], chart_data["EXPIRATION"], strict=True)
+            ],
+            hovertemplate="%{customdata[0]}<br>%{customdata[1]}<br>PnL: %{y:,.2f}%<extra></extra>",
+        )
+    )
     fig.update_layout(
         autosize=True,
         dragmode=False,
+        showlegend=False,
         height=380,
         hoverlabel={"bgcolor": "#111111", "bordercolor": "#60a5fa", "font": {"color": "#e5e7eb"}},
         margin={"l": 70, "r": 24, "t": 24, "b": 64},

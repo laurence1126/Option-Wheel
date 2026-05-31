@@ -190,6 +190,19 @@
         overflow: hidden;
       }
 
+      .chart h2 {
+        margin-bottom: 2px;
+      }
+
+      .chart-title-toggle {
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+      }
+
       .summary {
         margin-top: 14px;
         color: #e5e7eb;
@@ -279,8 +292,8 @@
             </div>
 
             {% if pnl_chart_html %}
-              <div class="chart">
-                <h2>Option PnL by Ticker (Expiration)</h2>
+              <div class="chart pnl-chart">
+                <h2><button class="chart-title-toggle" type="button" aria-pressed="false">Option PnL by Ticker / Expiration ($)</button></h2>
                 {{ pnl_chart_html | safe }}
               </div>
             {% endif %}
@@ -308,6 +321,8 @@
       const report = reportWrapper.querySelector("main");
       const phoneLayout = window.matchMedia("(max-width: 540px)");
       const sortableTable = document.querySelector(".sortable-table");
+      const pnlChart = document.querySelector(".pnl-chart .plotly-graph-div");
+      const pnlChartToggle = document.querySelector(".chart-title-toggle");
 
       function fitReportToPhone() {
         report.style.transform = "";
@@ -413,6 +428,19 @@
 
       sortableTable?.querySelectorAll(".sort-button").forEach((button) => {
         button.addEventListener("click", () => sortTable(button));
+      });
+
+      pnlChartToggle?.addEventListener("click", () => {
+        const showPercentage = pnlChartToggle.getAttribute("aria-pressed") !== "true";
+        pnlChartToggle.setAttribute("aria-pressed", String(showPercentage));
+        pnlChartToggle.textContent = `Option PnL by Ticker / Expiration (${showPercentage ? "%" : "$"})`;
+        Plotly.restyle(pnlChart, "visible", [!showPercentage, showPercentage]);
+        Plotly.relayout(pnlChart, {
+          "yaxis.title.text": `Option PnL (${showPercentage ? "%" : "USD"})`,
+          "yaxis.tickprefix": showPercentage ? "" : "$",
+          "yaxis.ticksuffix": showPercentage ? "%" : "",
+          "yaxis.tickformat": showPercentage ? ",.1f" : ",.0f",
+        });
       });
 
       fitReportToPhone();
