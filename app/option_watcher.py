@@ -71,7 +71,9 @@ def get_watcher_data() -> tuple[pd.DataFrame, float | None]:
         ret, quote_data = quote_context.get_stock_quote(result["_CODE"].unique().tolist())
         if ret != RET_OK or quote_data.empty:
             raise RuntimeError(f"Failed to fetch option quotes: {quote_data}")
-        quote_data = quote_data.set_index("code")[["delta"]].rename(columns={"delta": "_DELTA"})
+        quote_data = quote_data.set_index("code")[["delta", "implied_volatility"]].rename(
+            columns={"delta": "_DELTA", "implied_volatility": "_IMPL_VOL"}
+        )
         result = result.join(quote_data, on="_CODE").drop(columns="_CODE")
         return result, current_bp
     finally:
@@ -113,7 +115,7 @@ def build_option_watcher_context(df: pd.DataFrame | None = None, current_bp: flo
         "rows": rows,
         "chart_html": _build_notional_chart_html(options) if not options.empty else None,
         "pnl_chart_html": _build_pnl_chart_html(options) if not options.empty and "_PNL" in options else None,
-        "delta_chart_html": _build_delta_chart_html(options) if not options.empty and "_DELTA" in options else None,
+        "delta_chart_html": _build_delta_chart_html(options) if not options.empty and {"_DELTA", "_IMPL_VOL"}.issubset(options.columns) else None,
         "current_bp": fmt("", current_bp) if current_bp is not None else None,
         "total_bp": fmt("", total_bp),
         "bp_status": _get_bp_status(total_bp, current_bp),
@@ -321,7 +323,11 @@ def _build_delta_chart_html(df: pd.DataFrame) -> str | None:
         _CONTRACTS=df.loc[df["_DELTA"].notna(), "QTY"],
         _WEIGHTED_DELTA=df.loc[df["_DELTA"].notna(), "_DELTA"] * df.loc[df["_DELTA"].notna(), "QTY"],
     )
-    if delta_data.empty:
+    impl_vol_data = df.loc[df["_IMPL_VOL"].notna()].assign(
+        _CONTRACTS=df.loc[df["_IMPL_VOL"].notna(), "QTY"],
+        _WEIGHTED_IMPL_VOL=df.loc[df["_IMPL_VOL"].notna(), "_IMPL_VOL"] * df.loc[df["_IMPL_VOL"].notna(), "QTY"],
+    )
+    if delta_data.empty or impl_vol_data.empty:
         return None
 
     expiration_chart_data = (
@@ -337,6 +343,21 @@ def _build_delta_chart_html(df: pd.DataFrame) -> str | None:
         .sort_values(["EXPIRATION", "TICKER"])
     )
     ticker_chart_data["average_delta_pct"] = ticker_chart_data["weighted_delta"].div(ticker_chart_data["contracts"]).abs().mul(100)
+    expiration_impl_vol_chart_data = (
+        impl_vol_data.groupby("EXPIRATION", as_index=False)
+        .agg(weighted_impl_vol=("_WEIGHTED_IMPL_VOL", "sum"), contracts=("_CONTRACTS", "sum"))
+        .sort_values("EXPIRATION")
+    )
+    expiration_impl_vol_chart_data["average_impl_vol_pct"] = expiration_impl_vol_chart_data["weighted_impl_vol"].div(
+        expiration_impl_vol_chart_data["contracts"]
+    )
+    ticker_impl_vol_chart_data = (
+        impl_vol_data.reset_index()
+        .groupby(["TICKER", "EXPIRATION"], as_index=False)
+        .agg(weighted_impl_vol=("_WEIGHTED_IMPL_VOL", "sum"), contracts=("_CONTRACTS", "sum"))
+        .sort_values(["EXPIRATION", "TICKER"])
+    )
+    ticker_impl_vol_chart_data["average_impl_vol_pct"] = ticker_impl_vol_chart_data["weighted_impl_vol"].div(ticker_impl_vol_chart_data["contracts"])
 
     fig = go.Figure()
     fig.add_trace(
@@ -372,12 +393,46 @@ def _build_delta_chart_html(df: pd.DataFrame) -> str | None:
             hovertemplate="%{customdata[0]}<br>%{customdata[1]}<br>Delta: %{y:,.2f}%<extra></extra>",
         )
     )
+    fig.add_trace(
+        go.Bar(
+            x=[pd.Timestamp(expiration).strftime("%m/%d/%y") for expiration in expiration_impl_vol_chart_data["EXPIRATION"]],
+            y=expiration_impl_vol_chart_data["average_impl_vol_pct"].values,
+            visible=False,
+            marker_color="#a78bfa",
+            text=[f"{impl_vol:,.2f}%" for impl_vol in expiration_impl_vol_chart_data["average_impl_vol_pct"].values],
+            textposition="outside",
+            customdata=[[pd.Timestamp(expiration).strftime("%Y-%m-%d")] for expiration in expiration_impl_vol_chart_data["EXPIRATION"]],
+            hovertemplate="%{customdata[0]}<br>IV: %{y:,.2f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=[
+                f"{ticker}<br>{pd.Timestamp(expiration).strftime('%m/%d/%y')}"
+                for ticker, expiration in zip(ticker_impl_vol_chart_data["TICKER"], ticker_impl_vol_chart_data["EXPIRATION"], strict=True)
+            ],
+            y=ticker_impl_vol_chart_data["average_impl_vol_pct"].values,
+            visible=False,
+            marker_color="#a78bfa",
+            text=[f"{impl_vol:,.2f}%" for impl_vol in ticker_impl_vol_chart_data["average_impl_vol_pct"].values],
+            textposition="outside",
+            customdata=[
+                [ticker, pd.Timestamp(expiration).strftime("%Y-%m-%d")]
+                for ticker, expiration in zip(
+                    ticker_impl_vol_chart_data["TICKER"],
+                    ticker_impl_vol_chart_data["EXPIRATION"],
+                    strict=True,
+                )
+            ],
+            hovertemplate="%{customdata[0]}<br>%{customdata[1]}<br>IV: %{y:,.2f}%<extra></extra>",
+        )
+    )
     fig.update_layout(
         autosize=True,
         dragmode=False,
         showlegend=False,
         height=380,
-        hoverlabel={"bgcolor": "#111111", "bordercolor": "#60a5fa", "font": {"color": "#e5e7eb"}},
+        hoverlabel={"bgcolor": "#111111", "bordercolor": "#fb923c", "font": {"color": "#e5e7eb"}},
         margin={"l": 96, "r": 24, "t": 24, "b": 64, "autoexpand": False},
         paper_bgcolor="#1b1b1b",
         plot_bgcolor="#1b1b1b",

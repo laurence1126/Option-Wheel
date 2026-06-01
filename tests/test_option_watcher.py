@@ -10,9 +10,9 @@ class OptionWatcherTest(unittest.TestCase):
     def test_delta_chart_uses_contract_weighted_average(self) -> None:
         options = pd.DataFrame(
             [
-                {"TICKER": "SPY", "EXPIRATION": "2026-06-19", "QTY": -1, "_DELTA": -0.1},
-                {"TICKER": "SPY", "EXPIRATION": "2026-06-19", "QTY": -3, "_DELTA": -0.3},
-                {"TICKER": "QQQ", "EXPIRATION": "2026-06-19", "QTY": -2, "_DELTA": -0.5},
+                {"TICKER": "SPY", "EXPIRATION": "2026-06-19", "QTY": -1, "_DELTA": -0.1, "_IMPL_VOL": 20.0},
+                {"TICKER": "SPY", "EXPIRATION": "2026-06-19", "QTY": -3, "_DELTA": -0.3, "_IMPL_VOL": 40.0},
+                {"TICKER": "QQQ", "EXPIRATION": "2026-06-19", "QTY": -2, "_DELTA": -0.5, "_IMPL_VOL": 60.0},
             ]
         ).set_index("TICKER")
         figure = mock.Mock()
@@ -24,14 +24,23 @@ class OptionWatcherTest(unittest.TestCase):
         self.assertEqual(chart_html, "<div>chart</div>")
         expiration_trace = figure.add_trace.call_args_list[0].args[0]
         ticker_trace = figure.add_trace.call_args_list[1].args[0]
+        expiration_impl_vol_trace = figure.add_trace.call_args_list[2].args[0]
+        ticker_impl_vol_trace = figure.add_trace.call_args_list[3].args[0]
         self.assertAlmostEqual(expiration_trace.y.tolist()[0], 100 / 3)
         self.assertEqual(ticker_trace.y.tolist()[0], 50)
         self.assertAlmostEqual(ticker_trace.y.tolist()[1], 25)
+        self.assertAlmostEqual(expiration_impl_vol_trace.y.tolist()[0], 130 / 3)
+        self.assertEqual(ticker_impl_vol_trace.y.tolist()[0], 60)
+        self.assertEqual(ticker_impl_vol_trace.y.tolist()[1], 35)
+        self.assertFalse(expiration_trace.visible)
+        self.assertIsNone(ticker_trace.visible)
+        self.assertFalse(expiration_impl_vol_trace.visible)
+        self.assertFalse(ticker_impl_vol_trace.visible)
         self.assertNotIn("# of contracts", expiration_trace.hovertemplate)
         self.assertNotIn("# of contracts", ticker_trace.hovertemplate)
 
     def test_delta_chart_is_omitted_when_quotes_have_no_delta(self) -> None:
-        options = pd.DataFrame([{"TICKER": "SPY", "EXPIRATION": "2026-06-19", "QTY": -1, "_DELTA": None}]).set_index("TICKER")
+        options = pd.DataFrame([{"TICKER": "SPY", "EXPIRATION": "2026-06-19", "QTY": -1, "_DELTA": None, "_IMPL_VOL": 20.0}]).set_index("TICKER")
 
         self.assertIsNone(_build_delta_chart_html(options))
 

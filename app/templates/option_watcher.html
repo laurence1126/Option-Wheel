@@ -300,7 +300,7 @@
 
             {% if delta_chart_html %}
               <div class="chart delta-chart">
-                <h2 class="delta-chart-title">Average Abs Delta by Ticker / Expiration</h2>
+                <h2><button class="chart-title-toggle delta-chart-toggle" type="button" aria-pressed="true">Average Abs Delta by Ticker / Expiration</button></h2>
                 {{ delta_chart_html | safe }}
               </div>
             {% endif %}
@@ -333,7 +333,7 @@
       const pnlChart = document.querySelector(".pnl-chart .plotly-graph-div");
       const pnlChartToggle = document.querySelector(".pnl-chart-toggle");
       const deltaChart = document.querySelector(".delta-chart .plotly-graph-div");
-      const deltaChartTitle = document.querySelector(".delta-chart-title");
+      const deltaChartToggle = document.querySelector(".delta-chart-toggle");
 
       function fitReportToPhone() {
         report.style.transform = "";
@@ -461,14 +461,22 @@
       }
 
       function updateDeltaChart() {
-        if (!deltaChart || !deltaChartTitle) {
+        if (!deltaChart || !deltaChartToggle) {
           return;
         }
         const showTicker = notionalChartToggle.getAttribute("aria-pressed") === "true";
-        deltaChartTitle.textContent = `Average Abs Delta by ${showTicker ? "Ticker / Expiration" : "Expiration"}`;
-        Plotly.restyle(deltaChart, "visible", [!showTicker, showTicker]);
+        const showDelta = deltaChartToggle.getAttribute("aria-pressed") === "true";
+        deltaChartToggle.textContent = `Average ${showDelta ? "Abs Delta" : "Implied Volatility"} by ${showTicker ? "Ticker / Expiration" : "Expiration"}`;
+        Plotly.restyle(deltaChart, "visible", [
+          !showTicker && showDelta,
+          showTicker && showDelta,
+          !showTicker && !showDelta,
+          showTicker && !showDelta,
+        ]);
         Plotly.relayout(deltaChart, {
           "xaxis.title.text": showTicker ? "Ticker / Expiration" : "Expiration Date",
+          "yaxis.title.text": `Average ${showDelta ? "Abs Delta" : "Implied Volatility"} (%)`,
+          "hoverlabel.bordercolor": showDelta ? "#fb923c" : "#a78bfa",
         });
       }
 
@@ -490,6 +498,12 @@
         const showPercentage = pnlChartToggle.getAttribute("aria-pressed") !== "true";
         pnlChartToggle.setAttribute("aria-pressed", String(showPercentage));
         updatePnlChart();
+      });
+
+      deltaChartToggle?.addEventListener("click", () => {
+        const showDelta = deltaChartToggle.getAttribute("aria-pressed") !== "true";
+        deltaChartToggle.setAttribute("aria-pressed", String(showDelta));
+        updateDeltaChart();
       });
 
       fitReportToPhone();
