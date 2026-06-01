@@ -298,6 +298,13 @@
               </div>
             {% endif %}
 
+            {% if delta_chart_html %}
+              <div class="chart delta-chart">
+                <h2 class="delta-chart-title">Average Abs Delta by Ticker / Expiration</h2>
+                {{ delta_chart_html | safe }}
+              </div>
+            {% endif %}
+
             <div class="summary">
               {% if current_bp %}
                 Available Cash: <strong>${{ current_bp }}</strong><br>
@@ -325,6 +332,8 @@
       const notionalChartToggle = document.querySelector(".notional-chart-toggle");
       const pnlChart = document.querySelector(".pnl-chart .plotly-graph-div");
       const pnlChartToggle = document.querySelector(".pnl-chart-toggle");
+      const deltaChart = document.querySelector(".delta-chart .plotly-graph-div");
+      const deltaChartTitle = document.querySelector(".delta-chart-title");
 
       function fitReportToPhone() {
         report.style.transform = "";
@@ -451,6 +460,18 @@
         });
       }
 
+      function updateDeltaChart() {
+        if (!deltaChart || !deltaChartTitle) {
+          return;
+        }
+        const showTicker = notionalChartToggle.getAttribute("aria-pressed") === "true";
+        deltaChartTitle.textContent = `Average Abs Delta by ${showTicker ? "Ticker / Expiration" : "Expiration"}`;
+        Plotly.restyle(deltaChart, "visible", [!showTicker, showTicker]);
+        Plotly.relayout(deltaChart, {
+          "xaxis.title.text": showTicker ? "Ticker / Expiration" : "Expiration Date",
+        });
+      }
+
       notionalChartToggle?.addEventListener("click", () => {
         const showTicker = notionalChartToggle.getAttribute("aria-pressed") !== "true";
         notionalChartToggle.setAttribute("aria-pressed", String(showTicker));
@@ -462,6 +483,7 @@
           "xaxis.title.text": showTicker ? "Ticker / Expiration" : "Expiration Date",
         });
         updatePnlChart();
+        updateDeltaChart();
       });
 
       pnlChartToggle?.addEventListener("click", () => {

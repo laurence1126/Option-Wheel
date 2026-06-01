@@ -13,21 +13,25 @@ OPTION_PATTERN = re.compile(r"^(?P<symbol>[A-Z]+)\s+(?P<date>\d{6})\s+(?P<strike
 
 
 def get_watcher_data() -> tuple[pd.DataFrame, float | None]:
-    from futu import Currency, RET_OK
+    from futu import Currency, SubType, RET_OK
     from trading.config import futu_config
     from trading.utils import futu_utils
 
-    connection = futu_utils.create_trade_context(
+    trade_context = futu_utils.create_trade_context(
         futu_config.FUTU_OPEND_ADDRESS,
         futu_config.FUTU_OPEND_PORT,
         futu_config.TRADING_MARKET,
     )
+    quote_context = futu_utils.create_quote_context(
+        futu_config.FUTU_OPEND_ADDRESS,
+        futu_config.FUTU_OPEND_PORT,
+    )
     try:
-        ret, positions = connection.position_list_query()
+        ret, positions = trade_context.position_list_query()
         if ret != RET_OK:
             raise RuntimeError(positions)
 
-        ret, account = connection.accinfo_query(currency=Currency.USD)
+        ret, account = trade_context.accinfo_query(currency=Currency.USD)
         current_bp = float(account.iloc[0]["fund_assets"] + account.iloc[0]["cash"]) if ret == RET_OK and not account.empty else None
 
         rows = []
@@ -54,13 +58,25 @@ def get_watcher_data() -> tuple[pd.DataFrame, float | None]:
                     "_PREV CLOSE": previous_close,
                     "_NOTIONAL": abs(qty * strike * 100),
                     "_PNL": float(position["unrealized_pl"]),
+                    "_CODE": str(position["code"]),
                 }
             )
         if not rows:
             return pd.DataFrame(), current_bp
-        return pd.DataFrame(rows).set_index("TICKER").sort_values("PCT EXEC", ascending=False), current_bp
+
+        result = pd.DataFrame(rows).set_index("TICKER").sort_values("PCT EXEC", ascending=False)
+        ret, err_message = quote_context.subscribe(result["_CODE"].unique().tolist(), [SubType.QUOTE], subscribe_push=False)
+        if ret != RET_OK:
+            raise RuntimeError(f"Failed to subscribe to quotes: {err_message}")
+        ret, quote_data = quote_context.get_stock_quote(result["_CODE"].unique().tolist())
+        if ret != RET_OK or quote_data.empty:
+            raise RuntimeError(f"Failed to fetch option quotes: {quote_data}")
+        quote_data = quote_data.set_index("code")[["delta"]].rename(columns={"delta": "_DELTA"})
+        result = result.join(quote_data, on="_CODE").drop(columns="_CODE")
+        return result, current_bp
     finally:
-        connection.close()
+        trade_context.close()
+        quote_context.close()
 
 
 def fmt(column: str, value: object) -> str:
@@ -97,6 +113,7 @@ def build_option_watcher_context(df: pd.DataFrame | None = None, current_bp: flo
         "rows": rows,
         "chart_html": _build_notional_chart_html(options) if not options.empty else None,
         "pnl_chart_html": _build_pnl_chart_html(options) if not options.empty and "_PNL" in options else None,
+        "delta_chart_html": _build_delta_chart_html(options) if not options.empty and "_DELTA" in options else None,
         "current_bp": fmt("", current_bp) if current_bp is not None else None,
         "total_bp": fmt("", total_bp),
         "bp_status": _get_bp_status(total_bp, current_bp),
@@ -239,7 +256,7 @@ def _build_pnl_chart_html(df: pd.DataFrame) -> str:
             y=expiration_chart_data["pnl_pct"].values,
             visible=False,
             marker_color=["#22c55e" if pnl_pct >= 0 else "#ef4444" for pnl_pct in expiration_chart_data["pnl_pct"].values],
-            text=[f"{pnl_pct:,.1f}%" if pd.notna(pnl_pct) else "" for pnl_pct in expiration_chart_data["pnl_pct"].values],
+            text=[f"{pnl_pct:,.2f}%" if pd.notna(pnl_pct) else "" for pnl_pct in expiration_chart_data["pnl_pct"].values],
             textposition="outside",
             customdata=[[pd.Timestamp(expiration).strftime("%Y-%m-%d")] for expiration in expiration_chart_data["EXPIRATION"]],
             hovertemplate="%{customdata[0]}<br>PnL: %{y:,.2f}%<extra></extra>",
@@ -265,7 +282,7 @@ def _build_pnl_chart_html(df: pd.DataFrame) -> str:
             x=x_values,
             y=chart_data["pnl_pct"].values,
             marker_color=["#22c55e" if pnl_pct >= 0 else "#ef4444" for pnl_pct in chart_data["pnl_pct"].values],
-            text=[f"{pnl_pct:,.1f}%" if pd.notna(pnl_pct) else "" for pnl_pct in chart_data["pnl_pct"].values],
+            text=[f"{pnl_pct:,.2f}%" if pd.notna(pnl_pct) else "" for pnl_pct in chart_data["pnl_pct"].values],
             textposition="outside",
             customdata=[
                 [ticker, pd.Timestamp(expiration).strftime("%Y-%m-%d")]
@@ -286,6 +303,87 @@ def _build_pnl_chart_html(df: pd.DataFrame) -> str:
         font={"color": "#e5e7eb"},
         xaxis={"title": "Ticker / Expiration", "gridcolor": "#2f2f2f", "type": "category", "automargin": False},
         yaxis={"title": "Option PnL (%)", "gridcolor": "#2f2f2f", "ticksuffix": "%", "tickformat": ",.1f", "automargin": False},
+    )
+    return fig.to_html(
+        config={
+            "displaylogo": False,
+            "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+            "responsive": True,
+        },
+        default_height="380px",
+        full_html=False,
+        include_plotlyjs=False,
+    )
+
+
+def _build_delta_chart_html(df: pd.DataFrame) -> str | None:
+    delta_data = df.loc[df["_DELTA"].notna()].assign(
+        _CONTRACTS=df.loc[df["_DELTA"].notna(), "QTY"],
+        _WEIGHTED_DELTA=df.loc[df["_DELTA"].notna(), "_DELTA"] * df.loc[df["_DELTA"].notna(), "QTY"],
+    )
+    if delta_data.empty:
+        return None
+
+    expiration_chart_data = (
+        delta_data.groupby("EXPIRATION", as_index=False)
+        .agg(weighted_delta=("_WEIGHTED_DELTA", "sum"), contracts=("_CONTRACTS", "sum"))
+        .sort_values("EXPIRATION")
+    )
+    expiration_chart_data["average_delta_pct"] = expiration_chart_data["weighted_delta"].div(expiration_chart_data["contracts"]).abs().mul(100)
+    ticker_chart_data = (
+        delta_data.reset_index()
+        .groupby(["TICKER", "EXPIRATION"], as_index=False)
+        .agg(weighted_delta=("_WEIGHTED_DELTA", "sum"), contracts=("_CONTRACTS", "sum"))
+        .sort_values(["EXPIRATION", "TICKER"])
+    )
+    ticker_chart_data["average_delta_pct"] = ticker_chart_data["weighted_delta"].div(ticker_chart_data["contracts"]).abs().mul(100)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=[pd.Timestamp(expiration).strftime("%m/%d/%y") for expiration in expiration_chart_data["EXPIRATION"]],
+            y=expiration_chart_data["average_delta_pct"].values,
+            visible=False,
+            marker_color="#fb923c",
+            text=[f"{delta:,.2f}%" for delta in expiration_chart_data["average_delta_pct"].values],
+            textposition="outside",
+            customdata=[[pd.Timestamp(expiration).strftime("%Y-%m-%d")] for expiration in expiration_chart_data["EXPIRATION"]],
+            hovertemplate="%{customdata[0]}<br>Delta: %{y:,.2f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=[
+                f"{ticker}<br>{pd.Timestamp(expiration).strftime('%m/%d/%y')}"
+                for ticker, expiration in zip(ticker_chart_data["TICKER"], ticker_chart_data["EXPIRATION"], strict=True)
+            ],
+            y=ticker_chart_data["average_delta_pct"].values,
+            marker_color="#fb923c",
+            text=[f"{delta:,.2f}%" for delta in ticker_chart_data["average_delta_pct"].values],
+            textposition="outside",
+            customdata=[
+                [ticker, pd.Timestamp(expiration).strftime("%Y-%m-%d")]
+                for ticker, expiration in zip(
+                    ticker_chart_data["TICKER"],
+                    ticker_chart_data["EXPIRATION"],
+                    strict=True,
+                )
+            ],
+            hovertemplate="%{customdata[0]}<br>%{customdata[1]}<br>Delta: %{y:,.2f}%<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        autosize=True,
+        dragmode=False,
+        showlegend=False,
+        height=380,
+        hoverlabel={"bgcolor": "#111111", "bordercolor": "#60a5fa", "font": {"color": "#e5e7eb"}},
+        margin={"l": 96, "r": 24, "t": 24, "b": 64, "autoexpand": False},
+        paper_bgcolor="#1b1b1b",
+        plot_bgcolor="#1b1b1b",
+        font={"color": "#e5e7eb"},
+        xaxis={"title": "Ticker / Expiration", "gridcolor": "#2f2f2f", "type": "category", "automargin": False},
+        yaxis={"title": "Average Abs Delta (%)", "gridcolor": "#2f2f2f", "ticksuffix": "%", "tickformat": ",.1f", "automargin": False},
     )
     return fig.to_html(
         config={

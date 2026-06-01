@@ -77,7 +77,7 @@ class FlaskAppService:
 
 
 if __name__ == "__main__":
-    service = FlaskAppService()
+    service = FlaskAppService(port=5002)
     try:
         service.start()
         threading.Event().wait()
