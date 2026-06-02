@@ -17,10 +17,8 @@ def create_app() -> Flask:
         from app.option_watcher import build_option_watcher_context
         from app.option_watcher import get_watcher_data
 
-        loader = get_watcher_data
-
         try:
-            options, current_bp = loader()
+            options, current_bp = get_watcher_data()
         except Exception:
             app.logger.exception("Unable to load option watcher data.")
             context = build_option_watcher_context()

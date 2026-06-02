@@ -56,7 +56,7 @@ def get_watcher_data() -> tuple[pd.DataFrame, float | None]:
                     "CLOSE": close,
                     "PCT EXEC": strike / close * 100,
                     "_PREV CLOSE": previous_close,
-                    "_NOTIONAL": abs(qty * strike * 100),
+                    "_NOTIONAL": -qty * strike * 100,
                     "_PNL": float(position["unrealized_pl"]),
                     "_CODE": str(position["code"]),
                 }
@@ -77,6 +77,7 @@ def get_watcher_data() -> tuple[pd.DataFrame, float | None]:
         result = result.join(quote_data, on="_CODE").drop(columns="_CODE")
         return result, current_bp
     finally:
+        get_close_prices.cache_clear()
         trade_context.close()
         quote_context.close()
 

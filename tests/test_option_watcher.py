@@ -4,9 +4,38 @@ from unittest import mock
 import pandas as pd
 
 from app.option_watcher import _build_delta_chart_html
+from app.option_watcher import get_close_prices
+from app.option_watcher import get_watcher_data
 
 
 class OptionWatcherTest(unittest.TestCase):
+    def test_close_prices_are_cached_until_cleared(self) -> None:
+        get_close_prices.cache_clear()
+        self.addCleanup(get_close_prices.cache_clear)
+        ticker = mock.Mock()
+        ticker.history.return_value = pd.DataFrame({"Close": [100.0, 101.0]})
+
+        with mock.patch("app.option_watcher.yf.Ticker", return_value=ticker) as ticker_factory:
+            self.assertEqual(get_close_prices("SPY"), (100.0, 101.0))
+            self.assertEqual(get_close_prices("SPY"), (100.0, 101.0))
+
+        ticker_factory.assert_called_once_with("SPY")
+
+    def test_watcher_data_clears_close_price_cache_after_refresh(self) -> None:
+        trade_context = mock.Mock()
+        trade_context.position_list_query.return_value = (0, pd.DataFrame())
+        trade_context.accinfo_query.return_value = (0, pd.DataFrame())
+        quote_context = mock.Mock()
+
+        with (
+            mock.patch("trading.utils.futu_utils.create_trade_context", return_value=trade_context),
+            mock.patch("trading.utils.futu_utils.create_quote_context", return_value=quote_context),
+            mock.patch("app.option_watcher.get_close_prices") as close_prices,
+        ):
+            get_watcher_data()
+
+        close_prices.cache_clear.assert_called_once_with()
+
     def test_delta_chart_uses_contract_weighted_average(self) -> None:
         options = pd.DataFrame(
             [
