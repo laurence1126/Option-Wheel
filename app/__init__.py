@@ -19,7 +19,14 @@ def create_app(
 
     @app.get("/option-watcher")
     def option_watcher() -> str:
-        return render_template("option_watcher_loading.html")
+        return render_template(
+            "loading.html",
+            page_title="Option Price Watcher",
+            loading_title="Loading Option Watcher",
+            loading_paragraph="Fetching the latest positions and market data...",
+            frame_title="Option Price Watcher",
+            content_url="/option-watcher/content",
+        )
 
     @app.get("/option-watcher/content")
     def option_watcher_content() -> tuple[str, int] | str:
