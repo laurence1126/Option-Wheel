@@ -26,13 +26,14 @@ from trading.utils.logging_utils import configure_logger
 from trading.utils.telegram_utils import (
     TelegramConfig,
     answer_callback_query,
+    delete_telegram_webhook,
     edit_telegram_message_text,
     get_telegram_config,
-    get_telegram_updates,
     send_telegram_document,
     send_telegram_message,
     set_telegram_commands,
     set_telegram_commands_menu,
+    set_telegram_webhook,
 )
 
 if TYPE_CHECKING:
@@ -59,12 +60,8 @@ class TelegramBotService:
     def __init__(
         self,
         config_path: str = ".config",
-        poll_timeout_seconds: int = 30,
-        error_backoff_seconds: int = 5,
     ) -> None:
         self.config_path = config_path
-        self.poll_timeout_seconds = poll_timeout_seconds
-        self.error_backoff_seconds = error_backoff_seconds
 
         self.config: TelegramConfig | None = None
         self.engine: FutuTradingEngine | None = None
@@ -72,9 +69,6 @@ class TelegramBotService:
 
         self._running = False
         self._shortput_running = False
-        self._offset: int | None = None
-        self._shutdown_event = threading.Event()
-        self._poll_thread: threading.Thread | None = None
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._pending_shortput_confirmations: dict[str, PendingShortPut] = {}
         self._lock = threading.RLock()
@@ -103,23 +97,26 @@ class TelegramBotService:
             logger.info("Telegram bot service disabled by config.")
             return
 
-        self.enabled = True
         set_telegram_commands(self.config, BOT_COMMANDS)
         set_telegram_commands_menu(self.config)
-        self._discard_pending_updates()
+        if not set_telegram_webhook(
+            self.config,
+            url=self.config.webhook_url,
+            secret_token=self.config.webhook_secret_token,
+            drop_pending_updates=True,
+        ):
+            raise RuntimeError("Telegram webhook registration failed.")
+
         if was_restarted:
             send_telegram_message(self.config, "Trading engine restart complete 🎉")
         else:
             send_telegram_message(self.config, "Trading engine started 🎊")
 
-        self._shutdown_event.clear()
+        self.enabled = True
         self._running = True
-        self._poll_thread = threading.Thread(target=self._poll_loop, name="telegram-bot-poller", daemon=True)
-        self._poll_thread.start()
-        logger.info("Telegram bot service started.")
+        logger.info("Telegram bot service started with webhook: url=%s.", self.config.webhook_url)
 
     def shutdown(self) -> None:
-        self._shutdown_event.set()
         with self._lock:
             pending_approvals = list(self._pending_approvals.values())
             self._pending_approvals.clear()
@@ -128,9 +125,10 @@ class TelegramBotService:
             approval.result = False
             approval.event.set()
 
-        if self._poll_thread and self._poll_thread.is_alive() and threading.current_thread() is not self._poll_thread:
-            self._poll_thread.join(timeout=self.poll_timeout_seconds + 2)
+        if self.config is not None and self.enabled:
+            delete_telegram_webhook(self.config, drop_pending_updates=True)
         self._running = False
+        self.enabled = False
         logger.info("Telegram bot service stopped.")
 
     def request_trade_approval(self, summary: str, timeout_seconds: int) -> bool:
@@ -173,6 +171,12 @@ class TelegramBotService:
             )
             return False
         return approval.result is True
+
+    def handle_webhook_update(self, update: dict) -> None:
+        if not self.enabled or self.config is None:
+            logger.warning("Telegram webhook update ignored because Telegram bot service is disabled.")
+            return
+        self._handle_update(update)
 
     ####################################################################################################
     # Update / Callback Dispatch Handlers
@@ -411,41 +415,6 @@ class TelegramBotService:
             )
         else:
             answer_callback_query(self.config, callback_query_id, "Assignment action unavailable")
-
-    ####################################################################################################
-    # Polling
-    ####################################################################################################
-
-    def _poll_loop(self) -> None:
-        while not self._shutdown_event.is_set():
-            updates = get_telegram_updates(
-                self.config,
-                offset=self._offset,
-                timeout_seconds=self.poll_timeout_seconds,
-            )
-            if updates is None:
-                self._shutdown_event.wait(self.error_backoff_seconds)
-                continue
-
-            for update in updates:
-                if self._shutdown_event.is_set():
-                    break
-                self._offset = int(update["update_id"]) + 1
-                self._handle_update(update)
-
-    def _discard_pending_updates(self) -> None:
-        if self.config is None:
-            return
-
-        updates = get_telegram_updates(self.config, offset=None, timeout_seconds=0)
-        if updates is None:
-            logger.warning("Telegram startup update drain failed; continuing without discarding pending updates.")
-            return
-        if not updates:
-            return
-
-        self._offset = max(int(update["update_id"]) for update in updates) + 1
-        logger.info("Discarded pending Telegram updates on startup: count=%s, next_offset=%s.", len(updates), self._offset)
 
     ####################################################################################################
     # Trade Approval Callback Handling

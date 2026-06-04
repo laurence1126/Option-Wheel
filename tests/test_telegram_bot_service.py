@@ -79,7 +79,7 @@ class FakeExecutionResult:
 
 class TelegramBotServiceTest(unittest.TestCase):
     def make_service(self) -> TelegramBotService:
-        return TelegramBotService(config_path=".test_config", poll_timeout_seconds=0, error_backoff_seconds=0)
+        return TelegramBotService(config_path=".test_config")
 
     def add_pending_shortput(
         self,
@@ -103,7 +103,7 @@ class TelegramBotServiceTest(unittest.TestCase):
             time.sleep(0.01)
         self.fail(f"Timed out waiting for pending approval {approval_id}")
 
-    def test_start_registers_commands_menu_and_starts_polling_when_enabled(self):
+    def test_start_registers_commands_menu_and_webhook_when_enabled(self):
         service = self.make_service()
         config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
 
@@ -111,21 +111,27 @@ class TelegramBotServiceTest(unittest.TestCase):
             patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
             patch("trading.notification.telegram_bot.set_telegram_commands", return_value=True) as set_commands,
             patch("trading.notification.telegram_bot.set_telegram_commands_menu", return_value=True) as set_menu,
+            patch("trading.notification.telegram_bot.set_telegram_webhook", return_value=True) as set_webhook,
+            patch("trading.notification.telegram_bot.delete_telegram_webhook", return_value=True),
             patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)),
-            patch("trading.notification.telegram_bot.get_telegram_updates", return_value=[]),
             patch.dict("trading.notification.telegram_bot.os.environ", {}, clear=True),
         ):
             service.start(FakeEngine())
             self.assertTrue(service.enabled)
             self.assertTrue(service._running)
-            self.assertIsNotNone(service._poll_thread)
             set_commands.assert_called_once()
             self.assertIs(set_commands.call_args.args[0], config)
             self.assertEqual(
                 [command["command"] for command in set_commands.call_args.args[1]],
-                ["status", "watcher", "log", "shortput", "restart", "shutdown", "help", "start"],
+                ["status", "log", "watcher", "shortput", "restart", "shutdown", "help", "start"],
             )
             set_menu.assert_called_once_with(config)
+            set_webhook.assert_called_once_with(
+                config,
+                url=config.webhook_url,
+                secret_token=config.webhook_secret_token,
+                drop_pending_updates=True,
+            )
             service.shutdown()
 
     def test_command_consts_include_shortput(self):
@@ -161,8 +167,9 @@ class TelegramBotServiceTest(unittest.TestCase):
             patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
             patch("trading.notification.telegram_bot.set_telegram_commands", return_value=True),
             patch("trading.notification.telegram_bot.set_telegram_commands_menu", return_value=True),
+            patch("trading.notification.telegram_bot.set_telegram_webhook", return_value=True),
+            patch("trading.notification.telegram_bot.delete_telegram_webhook", return_value=True),
             patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
-            patch("trading.notification.telegram_bot.get_telegram_updates", return_value=[]),
             patch.dict("trading.notification.telegram_bot.os.environ", {RESTART_ENV_VAR: "1"}, clear=True),
         ):
             service.start(FakeEngine())
@@ -170,7 +177,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
         self.assertEqual(send_message.call_args_list[0].args[1], "Trading engine restart complete 🎉")
 
-    def test_start_after_exec_restart_does_not_spawn_recovery_thread(self):
+    def test_start_after_exec_restart_does_not_spawn_any_thread(self):
         service = self.make_service()
         config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
 
@@ -178,8 +185,9 @@ class TelegramBotServiceTest(unittest.TestCase):
             patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
             patch("trading.notification.telegram_bot.set_telegram_commands", return_value=True),
             patch("trading.notification.telegram_bot.set_telegram_commands_menu", return_value=True),
+            patch("trading.notification.telegram_bot.set_telegram_webhook", return_value=True),
+            patch("trading.notification.telegram_bot.delete_telegram_webhook", return_value=True),
             patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)),
-            patch("trading.notification.telegram_bot.get_telegram_updates", return_value=[]),
             patch("trading.notification.telegram_bot.threading.Thread") as make_thread,
             patch.dict("trading.notification.telegram_bot.os.environ", {RESTART_ENV_VAR: "1"}, clear=True),
         ):
@@ -187,32 +195,25 @@ class TelegramBotServiceTest(unittest.TestCase):
             service.start(FakeEngine())
             service.shutdown()
 
-        self.assertEqual([thread_call.kwargs["name"] for thread_call in make_thread.call_args_list], ["telegram-bot-poller"])
+        make_thread.assert_not_called()
 
-    def test_start_discards_pending_updates_before_polling(self):
+    def test_shutdown_deletes_webhook_and_clears_pending_approvals(self):
         service = self.make_service()
         config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
-        update_calls = 0
+        approval = mock_approval = threading.Event()
+        service.config = config
+        service.enabled = True
+        service._running = True
+        service._pending_approvals["approval-1"] = SimpleNamespace(event=approval, result=None)
 
-        def get_updates(*_, **__):
-            nonlocal update_calls
-            update_calls += 1
-            if update_calls == 1:
-                return [{"update_id": 10}, {"update_id": 12}]
-            return []
-
-        with (
-            patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
-            patch("trading.notification.telegram_bot.set_telegram_commands", return_value=True),
-            patch("trading.notification.telegram_bot.set_telegram_commands_menu", return_value=True),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)),
-            patch("trading.notification.telegram_bot.get_telegram_updates", side_effect=get_updates) as get_updates_mock,
-        ):
-            service.start(FakeEngine())
+        with patch("trading.notification.telegram_bot.delete_telegram_webhook", return_value=True) as delete_webhook:
             service.shutdown()
 
-        self.assertEqual(service._offset, 13)
-        self.assertEqual(get_updates_mock.call_args_list[0].kwargs["timeout_seconds"], 0)
+        delete_webhook.assert_called_once_with(config, drop_pending_updates=True)
+        self.assertFalse(service.enabled)
+        self.assertFalse(service._running)
+        self.assertTrue(mock_approval.is_set())
+        self.assertEqual(service._pending_approvals, {})
 
     def test_start_disabled_config_does_not_start_polling(self):
         service = self.make_service()
@@ -223,7 +224,6 @@ class TelegramBotServiceTest(unittest.TestCase):
 
         self.assertFalse(service.enabled)
         self.assertFalse(service._running)
-        self.assertIsNone(service._poll_thread)
 
     def test_status_command_only_responds_to_configured_chat(self):
         service = self.make_service()
@@ -237,6 +237,19 @@ class TelegramBotServiceTest(unittest.TestCase):
 
         self.assertEqual(send_message.call_count, 1)
         self.assertIs(send_message.call_args.args[0], service.config)
+        self.assertIn("Trading engine connected", send_message.call_args.args[1])
+
+    def test_handle_webhook_update_dispatches_existing_command_handlers(self):
+        service = self.make_service()
+        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.enabled = True
+        service.engine = FakeEngine()
+        update = {"update_id": 1, "message": {"chat": {"id": "123"}, "text": "/status"}}
+
+        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service.handle_webhook_update(update)
+
+        self.assertEqual(send_message.call_count, 1)
         self.assertIn("Trading engine connected", send_message.call_args.args[1])
         self.assertIn("Duration: 00:01:", send_message.call_args.args[1])
         self.assertIn("short_put: FakeStrategy", send_message.call_args.args[1])

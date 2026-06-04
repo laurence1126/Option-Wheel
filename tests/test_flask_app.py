@@ -3,6 +3,23 @@ import unittest
 import pandas as pd
 
 from app import create_app
+from trading.utils.telegram_utils import TelegramConfig
+
+
+class FakeTelegramBot:
+    def __init__(self) -> None:
+        self.config = TelegramConfig(
+            bot_token="token",
+            chat_id="123",
+            enabled=True,
+            webhook_base_url="https://option-wheel.ubuntu-nuc.com:8443",
+            webhook_path_secret="telegram-secret-path",
+            webhook_secret_token="telegram-secret-token",
+        )
+        self.updates = []
+
+    def handle_webhook_update(self, update: dict) -> None:
+        self.updates.append(update)
 
 
 class FlaskAppTest(unittest.TestCase):
@@ -84,6 +101,64 @@ class FlaskAppTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertIn(b"Confirm that Futu OpenD is running", response.data)
+
+    def test_telegram_webhook_dispatches_valid_update(self) -> None:
+        telegram = FakeTelegramBot()
+        app = create_app(telegram_bot_service=telegram)
+        update = {"update_id": 1, "message": {"chat": {"id": "123"}, "text": "/status"}}
+
+        with app.test_client() as client:
+            response = client.post(
+                "/telegram/webhook/telegram-secret-path",
+                json=update,
+                headers={"X-Telegram-Bot-Api-Secret-Token": "telegram-secret-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(telegram.updates, [update])
+
+    def test_telegram_webhook_rejects_invalid_secret_header(self) -> None:
+        telegram = FakeTelegramBot()
+        app = create_app(telegram_bot_service=telegram)
+
+        with app.test_client() as client:
+            response = client.post(
+                "/telegram/webhook/telegram-secret-path",
+                json={"update_id": 1},
+                headers={"X-Telegram-Bot-Api-Secret-Token": "wrong"},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(telegram.updates, [])
+
+    def test_telegram_webhook_rejects_invalid_path(self) -> None:
+        telegram = FakeTelegramBot()
+        app = create_app(telegram_bot_service=telegram)
+
+        with app.test_client() as client:
+            response = client.post(
+                "/telegram/webhook/wrong-path",
+                json={"update_id": 1},
+                headers={"X-Telegram-Bot-Api-Secret-Token": "telegram-secret-token"},
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(telegram.updates, [])
+
+    def test_telegram_webhook_rejects_malformed_json(self) -> None:
+        telegram = FakeTelegramBot()
+        app = create_app(telegram_bot_service=telegram)
+
+        with app.test_client() as client:
+            response = client.post(
+                "/telegram/webhook/telegram-secret-path",
+                data="{bad json",
+                content_type="application/json",
+                headers={"X-Telegram-Bot-Api-Secret-Token": "telegram-secret-token"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(telegram.updates, [])
 
 
 if __name__ == "__main__":

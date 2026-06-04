@@ -7,12 +7,13 @@ from unittest.mock import patch
 from trading.utils.telegram_utils import (
     TelegramConfig,
     answer_callback_query,
+    delete_telegram_webhook,
     edit_telegram_message_text,
     get_telegram_config,
-    get_telegram_updates,
     send_telegram_message,
     set_telegram_commands,
     set_telegram_commands_menu,
+    set_telegram_webhook,
 )
 
 
@@ -45,6 +46,9 @@ class TelegramUtilsTest(unittest.TestCase):
 bot_token = token123
 chat_id = chat456
 enabled = yes
+webhook_base_url = https://option-wheel.ubuntu-nuc.com:8443
+webhook_path_secret = telegram-secret-path
+webhook_secret_token = telegram-secret-token
 """
         )
 
@@ -53,6 +57,23 @@ enabled = yes
         self.assertEqual(config.bot_token, "token123")
         self.assertEqual(config.chat_id, "chat456")
         self.assertTrue(config.enabled)
+        self.assertEqual(config.webhook_base_url, "https://option-wheel.ubuntu-nuc.com:8443")
+        self.assertEqual(config.webhook_path_secret, "telegram-secret-path")
+        self.assertEqual(config.webhook_secret_token, "telegram-secret-token")
+        self.assertEqual(config.webhook_url, "https://option-wheel.ubuntu-nuc.com:8443/telegram-secret-path")
+
+    def test_get_telegram_config_requires_webhook_fields(self):
+        config_path = self.write_config(
+            """
+[telegram]
+bot_token = token123
+chat_id = chat456
+enabled = yes
+"""
+        )
+
+        with self.assertRaisesRegex(KeyError, "webhook_base_url"):
+            get_telegram_config(config_path)
 
     def make_config(self, enabled: bool = True) -> TelegramConfig:
         return TelegramConfig(bot_token="token123", chat_id="chat456", enabled=enabled)
@@ -133,21 +154,33 @@ enabled = yes
 
         self.assertEqual(sent, (False, None))
 
-    def test_get_telegram_updates_returns_update_list(self):
+    def test_set_telegram_webhook_posts_webhook_configuration(self):
         config = self.make_config()
-        api_response = {"ok": True, "result": [{"update_id": 7, "message": {"text": "/help"}}]}
 
-        with patch("trading.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse(api_response)) as urlopen:
-            updates = get_telegram_updates(config, offset=3, timeout_seconds=10)
+        with patch("trading.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True, "result": True})) as urlopen:
+            configured = set_telegram_webhook(config, config.webhook_url, config.webhook_secret_token)
 
-        self.assertEqual(updates, api_response["result"])
+        self.assertTrue(configured)
         request = urlopen.call_args.args[0]
         payload = json.loads(request.data.decode("utf-8"))
-        self.assertIn("/bottoken123/getUpdates", request.full_url)
-        self.assertEqual(payload["offset"], 3)
-        self.assertEqual(payload["timeout"], 10)
+        self.assertIn("/bottoken123/setWebhook", request.full_url)
+        self.assertEqual(payload["url"], "https://option-wheel.ubuntu-nuc.com:8443/test-webhook-path")
+        self.assertEqual(payload["secret_token"], "test-webhook-secret")
+        self.assertTrue(payload["drop_pending_updates"])
         self.assertEqual(payload["allowed_updates"], ["message", "callback_query"])
-        self.assertEqual(urlopen.call_args.kwargs["timeout"], 15)
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 3)
+
+    def test_delete_telegram_webhook_drops_pending_updates(self):
+        config = self.make_config()
+
+        with patch("trading.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True, "result": True})) as urlopen:
+            deleted = delete_telegram_webhook(config)
+
+        self.assertTrue(deleted)
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertIn("/bottoken123/deleteWebhook", request.full_url)
+        self.assertEqual(payload, {"drop_pending_updates": True})
 
     def test_answer_callback_query_posts_callback_id_and_text(self):
         config = self.make_config()

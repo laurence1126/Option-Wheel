@@ -57,7 +57,7 @@ class FutuTradingEngine:
         # Additional services initialization
         self.execution = OrderExecutionService(self)
         self.telegram = TelegramBotService()
-        self.flask_app = FlaskAppService()
+        self.flask_app = FlaskAppService(telegram_bot_service=self.telegram)
 
         # Load trading strategies
         self.strategy = self._normalize_strategy_input(strategy)

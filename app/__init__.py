@@ -1,7 +1,16 @@
-from flask import Flask, render_template
+from __future__ import annotations
+
+import secrets
+from typing import TYPE_CHECKING
+from flask import Flask, abort, render_template, request
+
+if TYPE_CHECKING:
+    from trading.notification.telegram_bot import TelegramBotService
 
 
-def create_app() -> Flask:
+def create_app(
+    telegram_bot_service: TelegramBotService | None = None,
+) -> Flask:
     app = Flask(__name__)
 
     @app.get("/")
@@ -26,5 +35,22 @@ def create_app() -> Flask:
             return render_template("option_watcher.html", **context), 503
 
         return render_template("option_watcher.html", **build_option_watcher_context(options, current_bp))
+
+    @app.post("/telegram/webhook/<path:webhook_path_secret>")
+    def telegram_webhook(webhook_path_secret: str) -> tuple[str, int]:
+        config = telegram_bot_service.config if telegram_bot_service is not None else None
+        if config is None or not secrets.compare_digest(webhook_path_secret.strip("/"), config.webhook_path_secret):
+            abort(404)
+
+        secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not secrets.compare_digest(secret_token, config.webhook_secret_token):
+            abort(403)
+
+        update = request.get_json(silent=True)
+        if not isinstance(update, dict):
+            abort(400)
+
+        telegram_bot_service.handle_webhook_update(update)
+        return "", 200
 
     return app

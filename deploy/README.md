@@ -43,6 +43,22 @@ sudo deploy/install-systemd.sh "$USER" "$PWD"
 
 The installer validates the virtual environment and secret files, restricts secret-file permissions, installs the service units, and enables both the engine and weekly timer.
 
+## Telegram Webhook
+
+Telegram inbound commands use webhooks only. Add these fields to the repository-root `.config` file:
+
+```ini
+[telegram]
+bot_token = ...
+chat_id = ...
+enabled = yes
+webhook_base_url = https://option-wheel.ubuntu-nuc.com:8443
+webhook_path_secret = use-a-long-random-path
+webhook_secret_token = use-a-different-long-random-token
+```
+
+Expose `https://option-wheel.ubuntu-nuc.com:8443/<webhook_path_secret>` with a valid TLS certificate and reverse-proxy it to the local Flask app, normally `http://127.0.0.1:5001/telegram/webhook/<webhook_path_secret>`. Telegram's cloud Bot API supports webhook ports `443`, `80`, `88`, and `8443`; this deployment uses `8443` to keep the webhook separate from the watcher app.
+
 ## Verify
 
 ```bash

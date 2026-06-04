@@ -24,12 +24,13 @@ class FlaskAppService:
         host: str | None = None,
         port: int | None = None,
         shutdown_timeout_seconds: int = 5,
-        app_factory: Callable[[], Flask] = create_app,
+        app_factory: Callable[[], Flask] | None = None,
+        telegram_bot_service: object | None = None,
     ) -> None:
         self.host = host or os.environ.get("OPTION_WHEEL_APP_HOST", "0.0.0.0")
         self.port = port if port is not None else int(os.environ.get("OPTION_WHEEL_APP_PORT", "5001"))
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
-        self.app_factory = app_factory
+        self.app_factory = app_factory or (lambda: create_app(telegram_bot_service=telegram_bot_service))
 
         self._server: BaseWSGIServer | None = None
         self._server_thread: threading.Thread | None = None

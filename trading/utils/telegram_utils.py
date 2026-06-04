@@ -17,7 +17,14 @@ logger = configure_logger(__name__)
 class TelegramConfig:
     bot_token: str
     chat_id: str
+    webhook_base_url: str
+    webhook_path_secret: str
+    webhook_secret_token: str
     enabled: bool
+
+    @property
+    def webhook_url(self) -> str:
+        return f"{self.webhook_base_url.rstrip('/')}/{self.webhook_path_secret.strip('/')}"
 
 
 def get_telegram_config(config_path: str = ".config") -> TelegramConfig:
@@ -31,18 +38,32 @@ def get_telegram_config(config_path: str = ".config") -> TelegramConfig:
         telegram_section = parser["telegram"]
         bot_token = telegram_section["bot_token"].strip()
         chat_id = telegram_section["chat_id"].strip()
+        webhook_base_url = telegram_section["webhook_base_url"].strip()
+        webhook_path_secret = telegram_section["webhook_path_secret"].strip().strip("/")
+        webhook_secret_token = telegram_section["webhook_secret_token"].strip()
         enabled_raw = telegram_section["enabled"].strip()
     except KeyError as exc:
-        raise KeyError(f"Missing [telegram] bot_token, chat_id, or enabled in {path}") from exc
+        raise KeyError(
+            f"Missing [telegram] bot_token, chat_id, enabled, webhook_base_url, webhook_path_secret, or webhook_secret_token in {path}"
+        ) from exc
 
     if not bot_token:
         raise ValueError(f"Missing non-empty [telegram] bot_token in {path}")
     if not chat_id:
         raise ValueError(f"Missing non-empty [telegram] chat_id in {path}")
+    if not webhook_base_url:
+        raise ValueError(f"Missing non-empty [telegram] webhook_base_url in {path}")
+    if not webhook_path_secret:
+        raise ValueError(f"Missing non-empty [telegram] webhook_path_secret in {path}")
+    if not webhook_secret_token:
+        raise ValueError(f"Missing non-empty [telegram] webhook_secret_token in {path}")
 
     return TelegramConfig(
         bot_token=bot_token,
         chat_id=chat_id,
+        webhook_base_url=webhook_base_url,
+        webhook_path_secret=webhook_path_secret,
+        webhook_secret_token=webhook_secret_token,
         enabled=_parse_enabled(enabled_raw),
     )
 
@@ -127,22 +148,31 @@ def send_telegram_document(config: TelegramConfig, file_path: str | Path, captio
     return True
 
 
-def get_telegram_updates(config: TelegramConfig, offset: int | None = None, timeout_seconds: int = 30) -> list[dict] | None:
+def set_telegram_webhook(
+    config: TelegramConfig,
+    url: str,
+    secret_token: str,
+    drop_pending_updates: bool = True,
+    allowed_updates: list[str] | None = None,
+) -> bool:
     payload: dict[str, object] = {
-        "timeout": timeout_seconds,
-        "allowed_updates": ["message", "callback_query"],
+        "url": url,
+        "secret_token": secret_token,
+        "drop_pending_updates": drop_pending_updates,
+        "allowed_updates": allowed_updates or ["message", "callback_query"],
     }
-    if offset is not None:
-        payload["offset"] = offset
+    result = _post_telegram_api(config, "setWebhook", payload, timeout_seconds=5)
+    return result is not None
 
-    result = _post_telegram_api(config, "getUpdates", payload, timeout_seconds=timeout_seconds + 5)
-    if result is None:
-        return None
-    updates = result.get("result")
-    if not isinstance(updates, list):
-        logger.error("Telegram getUpdates failed: invalid result payload.")
-        return None
-    return updates
+
+def delete_telegram_webhook(config: TelegramConfig, drop_pending_updates: bool = True) -> bool:
+    result = _post_telegram_api(
+        config,
+        "deleteWebhook",
+        {"drop_pending_updates": drop_pending_updates},
+        timeout_seconds=5,
+    )
+    return result is not None
 
 
 def answer_callback_query(config: TelegramConfig, callback_query_id: str, text: str) -> bool:
@@ -150,7 +180,7 @@ def answer_callback_query(config: TelegramConfig, callback_query_id: str, text: 
         config,
         "answerCallbackQuery",
         {"callback_query_id": callback_query_id, "text": text},
-        timeout_seconds=3,
+        timeout_seconds=5,
     )
     return result is not None
 
@@ -172,7 +202,7 @@ def edit_telegram_message_text(
         config,
         "editMessageText",
         payload,
-        timeout_seconds=3,
+        timeout_seconds=5,
     )
     return result is not None
 
@@ -182,7 +212,7 @@ def set_telegram_commands(config: TelegramConfig, commands: list[dict[str, str]]
         config,
         "setMyCommands",
         {"commands": commands},
-        timeout_seconds=3,
+        timeout_seconds=5,
     )
     return result is not None
 
@@ -192,7 +222,7 @@ def set_telegram_commands_menu(config: TelegramConfig) -> bool:
         config,
         "setChatMenuButton",
         {"chat_id": config.chat_id, "menu_button": {"type": "commands"}},
-        timeout_seconds=3,
+        timeout_seconds=5,
     )
     return result is not None
 
