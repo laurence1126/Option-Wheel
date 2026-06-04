@@ -46,7 +46,7 @@ class TelegramUtilsTest(unittest.TestCase):
 bot_token = token123
 chat_id = chat456
 enabled = yes
-webhook_base_url = https://option-wheel.ubuntu-nuc.com:8443
+webhook_base_url = https://option-wheel.ubuntu-nuc.com:8443/telegram/webhook
 webhook_path_secret = telegram-secret-path
 webhook_secret_token = telegram-secret-token
 """
@@ -57,10 +57,10 @@ webhook_secret_token = telegram-secret-token
         self.assertEqual(config.bot_token, "token123")
         self.assertEqual(config.chat_id, "chat456")
         self.assertTrue(config.enabled)
-        self.assertEqual(config.webhook_base_url, "https://option-wheel.ubuntu-nuc.com:8443")
+        self.assertEqual(config.webhook_base_url, "https://option-wheel.ubuntu-nuc.com:8443/telegram/webhook")
         self.assertEqual(config.webhook_path_secret, "telegram-secret-path")
         self.assertEqual(config.webhook_secret_token, "telegram-secret-token")
-        self.assertEqual(config.webhook_url, "https://option-wheel.ubuntu-nuc.com:8443/telegram-secret-path")
+        self.assertEqual(config.webhook_url, "https://option-wheel.ubuntu-nuc.com:8443/telegram/webhook/telegram-secret-path")
 
     def test_get_telegram_config_requires_webhook_fields(self):
         config_path = self.write_config(
@@ -76,7 +76,14 @@ enabled = yes
             get_telegram_config(config_path)
 
     def make_config(self, enabled: bool = True) -> TelegramConfig:
-        return TelegramConfig(bot_token="token123", chat_id="chat456", enabled=enabled)
+        return TelegramConfig(
+            bot_token="token123",
+            chat_id="chat456",
+            webhook_base_url="https://option-wheel.ubuntu-nuc.com:8443/telegram/webhook",
+            webhook_path_secret="test-webhook-path",
+            webhook_secret_token="test-webhook-secret",
+            enabled=enabled,
+        )
 
     def test_send_telegram_message_does_not_check_enabled_flag(self):
         config = self.make_config(enabled=False)
@@ -164,11 +171,11 @@ enabled = yes
         request = urlopen.call_args.args[0]
         payload = json.loads(request.data.decode("utf-8"))
         self.assertIn("/bottoken123/setWebhook", request.full_url)
-        self.assertEqual(payload["url"], "https://option-wheel.ubuntu-nuc.com:8443/test-webhook-path")
+        self.assertEqual(payload["url"], "https://option-wheel.ubuntu-nuc.com:8443/telegram/webhook/test-webhook-path")
         self.assertEqual(payload["secret_token"], "test-webhook-secret")
         self.assertTrue(payload["drop_pending_updates"])
         self.assertEqual(payload["allowed_updates"], ["message", "callback_query"])
-        self.assertEqual(urlopen.call_args.kwargs["timeout"], 3)
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 5)
 
     def test_delete_telegram_webhook_drops_pending_updates(self):
         config = self.make_config()

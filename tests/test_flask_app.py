@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -34,17 +35,16 @@ class FlaskAppTest(unittest.TestCase):
         self.assertIn(b"The welcome page", response.data)
 
     def test_option_watcher_page_renders_loading_animation_without_loading_data(self) -> None:
-        load_calls = []
-        app = create_app(watcher_data_loader=lambda: load_calls.append(True))
+        app = create_app()
 
-        with app.test_client() as client:
+        with patch("app.option_watcher.get_watcher_data") as get_watcher_data, app.test_client() as client:
             response = client.get("/option-watcher")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Loading Option Watcher", response.data)
         self.assertIn(b'class="spinner"', response.data)
         self.assertIn(b'data-src="/option-watcher/content"', response.data)
-        self.assertEqual(load_calls, [])
+        get_watcher_data.assert_not_called()
 
     def test_option_watcher_content_renders_interactive_plotly_chart(self) -> None:
         options = pd.DataFrame(
@@ -63,9 +63,9 @@ class FlaskAppTest(unittest.TestCase):
                 }
             ]
         ).set_index("TICKER")
-        app = create_app(watcher_data_loader=lambda: (options, 100_000.0))
+        app = create_app()
 
-        with app.test_client() as client:
+        with patch("app.option_watcher.get_watcher_data", return_value=(options, 100_000.0)), app.test_client() as client:
             response = client.get("/option-watcher/content")
 
         self.assertEqual(response.status_code, 200)
@@ -82,9 +82,9 @@ class FlaskAppTest(unittest.TestCase):
         self.assertIn(b'aria-sort="descending"', response.data)
 
     def test_option_watcher_page_handles_empty_position_list(self) -> None:
-        app = create_app(watcher_data_loader=lambda: (pd.DataFrame(), 100_000.0))
+        app = create_app()
 
-        with app.test_client() as client:
+        with patch("app.option_watcher.get_watcher_data", return_value=(pd.DataFrame(), 100_000.0)), app.test_client() as client:
             response = client.get("/option-watcher/content")
 
         self.assertEqual(response.status_code, 200)
@@ -94,9 +94,9 @@ class FlaskAppTest(unittest.TestCase):
         def fail_to_load_watcher() -> tuple[pd.DataFrame, float | None]:
             raise RuntimeError("OpenD unavailable")
 
-        app = create_app(watcher_data_loader=fail_to_load_watcher)
+        app = create_app()
 
-        with app.test_client() as client:
+        with patch("app.option_watcher.get_watcher_data", side_effect=fail_to_load_watcher), app.test_client() as client:
             response = client.get("/option-watcher/content")
 
         self.assertEqual(response.status_code, 503)

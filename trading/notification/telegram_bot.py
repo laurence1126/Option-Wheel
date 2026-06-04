@@ -476,7 +476,7 @@ class TelegramBotService:
     def _confirm_shutdown(self, callback_query_id: str, chat_id: str, message_id: int) -> None:
         answer_callback_query(self.config, callback_query_id, "Shutdown confirmed")
         edit_telegram_message_text(self.config, chat_id=chat_id, message_id=message_id, text="Trading engine shutdown confirmed.")
-        self._shutdown_process()
+        self._run_process_control_in_background(self._shutdown_process, "telegram-shutdown")
 
     def _cancel_shutdown(self, callback_query_id: str, chat_id: str, message_id: int) -> None:
         answer_callback_query(self.config, callback_query_id, "Shutdown cancelled")
@@ -503,7 +503,7 @@ class TelegramBotService:
     def _confirm_restart(self, callback_query_id: str, chat_id: str, message_id: int) -> None:
         answer_callback_query(self.config, callback_query_id, "Restart confirmed")
         edit_telegram_message_text(self.config, chat_id=chat_id, message_id=message_id, text="Trading engine restart confirmed. Restarting now...")
-        self._restart_process()
+        self._run_process_control_in_background(self._restart_process, "telegram-restart")
 
     def _cancel_restart(self, callback_query_id: str, chat_id: str, message_id: int) -> None:
         answer_callback_query(self.config, callback_query_id, "Restart cancelled")
@@ -865,6 +865,9 @@ class TelegramBotService:
         if self.engine is not None:
             self.engine.close()
         os._exit(0)
+
+    def _run_process_control_in_background(self, target: Callable[[], None], name: str) -> None:
+        threading.Thread(target=target, name=name, daemon=True).start()
 
     ####################################################################################################
     # Internal Utilities

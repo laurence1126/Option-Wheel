@@ -2,14 +2,13 @@ import threading
 import time
 import unittest
 import datetime as dt
-import socket
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
 
 from trading.notification.telegram_bot import PendingShortPut, RESTART_ENV_VAR, TelegramBotService
-from trading.notification.telegram_consts import BOT_COMMANDS, HELP_TEXT, get_host, get_option_watcher_url
+from trading.notification.telegram_consts import BOT_COMMANDS, HELP_TEXT, OPTION_WATCHER_APP_URL
 from trading.notification.telegram_summary import (
     build_assignment_summary,
     build_cut_loss_summary,
@@ -81,6 +80,16 @@ class TelegramBotServiceTest(unittest.TestCase):
     def make_service(self) -> TelegramBotService:
         return TelegramBotService(config_path=".test_config")
 
+    def make_config(self, enabled: bool = True) -> TelegramConfig:
+        return TelegramConfig(
+            bot_token="token",
+            chat_id="123",
+            enabled=enabled,
+            webhook_base_url="https://telegram-option-wheel.ubuntu-nuc.com/telegram/webhook",
+            webhook_path_secret="test-webhook-path",
+            webhook_secret_token="test-webhook-secret",
+        )
+
     def add_pending_shortput(
         self,
         service: TelegramBotService,
@@ -105,7 +114,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_start_registers_commands_menu_and_webhook_when_enabled(self):
         service = self.make_service()
-        config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        config = self.make_config()
 
         with (
             patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
@@ -142,26 +151,9 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.assertIn("watcher", [command["command"] for command in BOT_COMMANDS])
         self.assertIn("/watcher - Open the option watcher app", HELP_TEXT)
 
-    def test_get_host_returns_ipv4_address_matching_prefix(self):
-        addresses = {
-            "en0": [SimpleNamespace(family=socket.AF_INET, address="192.168.1.10")],
-            "utun4": [SimpleNamespace(family=socket.AF_INET, address="100.99.21.101")],
-        }
-
-        with patch("trading.notification.telegram_consts.psutil.net_if_addrs", return_value=addresses):
-            self.assertEqual(get_host("100"), "100.99.21.101")
-            self.assertEqual(get_option_watcher_url(), "http://100.99.21.101:5001/option-watcher")
-
-    def test_get_host_raises_when_prefix_is_unavailable(self):
-        addresses = {"en0": [SimpleNamespace(family=socket.AF_INET, address="192.168.1.10")]}
-
-        with patch("trading.notification.telegram_consts.psutil.net_if_addrs", return_value=addresses):
-            with self.assertRaisesRegex(ValueError, "No IPv4 host address starts with '100'"):
-                get_host("100")
-
     def test_start_sends_restarted_message_after_exec_restart(self):
         service = self.make_service()
-        config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        config = self.make_config()
 
         with (
             patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
@@ -179,7 +171,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_start_after_exec_restart_does_not_spawn_any_thread(self):
         service = self.make_service()
-        config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        config = self.make_config()
 
         with (
             patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
@@ -199,7 +191,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shutdown_deletes_webhook_and_clears_pending_approvals(self):
         service = self.make_service()
-        config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        config = self.make_config()
         approval = mock_approval = threading.Event()
         service.config = config
         service.enabled = True
@@ -217,7 +209,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_start_disabled_config_does_not_start_polling(self):
         service = self.make_service()
-        config = TelegramConfig(bot_token="token", chat_id="123", enabled=False)
+        config = self.make_config(enabled=False)
 
         with patch("trading.notification.telegram_bot.get_telegram_config", return_value=config):
             service.start(FakeEngine())
@@ -227,7 +219,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_status_command_only_responds_to_configured_chat(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
@@ -241,7 +233,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_handle_webhook_update_dispatches_existing_command_handlers(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         update = {"update_id": 1, "message": {"chat": {"id": "123"}, "text": "/status"}}
@@ -256,13 +248,10 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_watcher_command_sends_option_watcher_link(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
 
-        with (
-            patch("trading.notification.telegram_bot.get_option_watcher_url", return_value="http://100.99.21.101:5001/option-watcher"),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
-        ):
+        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
             service._handle_message({"chat": {"id": "123"}, "text": "/watcher"})
 
         send_message.assert_called_once_with(
@@ -270,27 +259,14 @@ class TelegramBotServiceTest(unittest.TestCase):
             "Click the button below:",
             reply_markup={
                 "inline_keyboard": [
-                    [{"text": "📲 Open Option Watcher", "url": "http://100.99.21.101:5001/option-watcher"}]
+                    [{"text": "📲 Open Option Watcher", "web_app": {"url": OPTION_WATCHER_APP_URL}}]
                 ]
             },
         )
 
-    def test_watcher_command_reports_unavailable_host(self):
-        service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
-        service.enabled = True
-
-        with (
-            patch("trading.notification.telegram_bot.get_option_watcher_url", side_effect=ValueError("missing")),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
-        ):
-            service._handle_message({"chat": {"id": "123"}, "text": "/watcher"})
-
-        send_message.assert_called_once_with(service.config, "Option watcher unavailable.")
-
     def test_watcher_command_ignores_disallowed_chat(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
 
         with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
@@ -300,7 +276,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shutdown_command_requests_inline_confirmation_without_closing_engine(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
@@ -314,16 +290,16 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.assertEqual(reply_markup["inline_keyboard"][0][0]["callback_data"], "shutdown:confirm")
         self.assertEqual(reply_markup["inline_keyboard"][0][1]["callback_data"], "shutdown:cancel")
 
-    def test_shutdown_confirm_callback_closes_engine_and_exits_process(self):
+    def test_shutdown_confirm_callback_runs_shutdown_in_background_thread(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
         with (
             patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
             patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.os._exit") as exit_process,
+            patch("trading.notification.telegram_bot.threading.Thread") as thread,
         ):
             service._handle_callback_query(
                 {
@@ -333,14 +309,15 @@ class TelegramBotServiceTest(unittest.TestCase):
                 }
             )
 
-        self.assertTrue(service.engine._closed)
+        self.assertFalse(service.engine._closed)
         answer.assert_called_once_with(service.config, "callback-1", "Shutdown confirmed")
         self.assertEqual(edit_message.call_args.kwargs["text"], "Trading engine shutdown confirmed.")
-        exit_process.assert_called_once_with(0)
+        thread.assert_called_once_with(target=service._shutdown_process, name="telegram-shutdown", daemon=True)
+        thread.return_value.start.assert_called_once_with()
 
     def test_shutdown_cancel_callback_does_not_close_engine(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
@@ -360,7 +337,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_restart_command_requests_inline_confirmation_without_closing_engine(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
@@ -374,18 +351,16 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.assertEqual(reply_markup["inline_keyboard"][0][0]["callback_data"], "restart:confirm")
         self.assertEqual(reply_markup["inline_keyboard"][0][1]["callback_data"], "restart:cancel")
 
-    def test_restart_confirm_callback_closes_engine_and_execs_current_command(self):
+    def test_restart_confirm_callback_runs_restart_in_background_thread(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
         with (
             patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
             patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.os.execv") as execv,
-            patch("trading.notification.telegram_bot.sys.executable", "python"),
-            patch("trading.notification.telegram_bot.sys.argv", ["run.py", "--live"]),
+            patch("trading.notification.telegram_bot.threading.Thread") as thread,
             patch.dict("trading.notification.telegram_bot.os.environ", {}, clear=True),
         ):
             service._handle_callback_query(
@@ -396,15 +371,15 @@ class TelegramBotServiceTest(unittest.TestCase):
                 }
             )
 
-        self.assertTrue(service.engine._closed)
+        self.assertFalse(service.engine._closed)
         answer.assert_called_once_with(service.config, "callback-1", "Restart confirmed")
         self.assertEqual(edit_message.call_args.kwargs["text"], "Trading engine restart confirmed. Restarting now...")
-        self.assertEqual(execv.call_args.args[1], ["python", "run.py", "--live"])
-        execv.assert_called_once_with("python", ["python", "run.py", "--live"])
+        thread.assert_called_once_with(target=service._restart_process, name="telegram-restart", daemon=True)
+        thread.return_value.start.assert_called_once_with()
 
     def test_restart_cancel_callback_does_not_restart(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
@@ -428,7 +403,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_command_requests_inline_confirmation(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
@@ -448,7 +423,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_command_ignores_disallowed_chat(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
@@ -460,7 +435,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_command_rejects_missing_strategy_action_without_pending_confirmation(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy = {"short_put": object()}
@@ -473,7 +448,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_cancel_callback_does_not_execute(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         self.add_pending_shortput(service)
@@ -500,7 +475,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_confirm_callback_starts_one_background_strategy_run(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         self.add_pending_shortput(service)
@@ -542,7 +517,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_expired_confirm_does_not_execute(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         self.add_pending_shortput(service, seconds=-1)
@@ -569,7 +544,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_confirm_rejects_duplicate_while_run_is_active(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service._shortput_running = True
@@ -596,7 +571,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_confirm_rejects_missing_engine(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = None
         self.add_pending_shortput(service)
@@ -620,7 +595,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_confirm_rejects_missing_strategy_action(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy = {"short_put": object()}
@@ -645,7 +620,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_command_sends_strategy_selection_when_multiple_match(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy["second_short_put"] = FakeStrategy()
@@ -670,7 +645,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_select_edits_message_to_confirm_selected_strategy(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy["second_short_put"] = FakeStrategy()
@@ -697,7 +672,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_confirm_after_selection_starts_selected_strategy_only(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy["second_short_put"] = FakeStrategy()
@@ -740,7 +715,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_expired_select_does_not_execute(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy["second_short_put"] = FakeStrategy()
@@ -773,7 +748,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_shortput_confirm_rejects_selected_strategy_missing_after_selection(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         self.add_pending_shortput(
@@ -802,7 +777,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_short_put_retry_callback_removes_keyboard_and_retries_in_thread(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
@@ -836,7 +811,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_short_put_cancel_callback_removes_keyboard_without_retry(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
@@ -870,7 +845,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_short_put_retry_callback_ignores_disallowed_chat(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
@@ -894,7 +869,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_short_put_retry_callback_answers_when_strategy_unavailable(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy = {}
@@ -918,7 +893,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_strategy_retry_callback_answers_when_retry_action_unavailable(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
 
@@ -941,7 +916,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_assignment_liquidate_callback_replaces_keyboard_with_method_choices(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"] = "liquidating"
@@ -985,7 +960,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_assignment_market_order_callback_updates_message_prompt_and_removes_keyboard(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"] = "liquidating"
@@ -1021,7 +996,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_assignment_market_order_callback_does_not_reset_running_action(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"] = "market_order_executing"
@@ -1046,7 +1021,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_assignment_market_order_callback_retries_failed_action(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"] = "market_order_failed"
@@ -1080,7 +1055,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_assignment_expired_callback_removes_token_without_execution(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["expires_at"] = pd.Timestamp.now() - pd.Timedelta(seconds=1)
@@ -1106,7 +1081,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_assignment_price_ladder_callback_updates_message_prompt_and_removes_keyboard(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"] = "liquidating"
@@ -1153,7 +1128,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_assignment_cancel_callback_updates_message_prompt_and_removes_pending_action(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
         service.engine = FakeEngine()
         summary = build_assignment_summary(
@@ -1186,7 +1161,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_approve_callback_resolves_pending_approval_true(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
 
         with (
@@ -1216,7 +1191,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_reject_callback_resolves_pending_approval_false(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
 
         with (
@@ -1246,7 +1221,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_approval_timeout_returns_false(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
 
         with (
@@ -1268,7 +1243,7 @@ class TelegramBotServiceTest(unittest.TestCase):
 
     def test_expired_approval_callback_only_answers_popup(self):
         service = self.make_service()
-        service.config = TelegramConfig(bot_token="token", chat_id="123", enabled=True)
+        service.config = self.make_config()
         service.enabled = True
 
         with (
