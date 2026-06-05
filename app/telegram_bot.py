@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Protocol
 
+from app.utils.logging_utils import configure_logger
 from app.utils.telegram_utils import (
     TelegramConfig,
     answer_telegram_callback_query,
@@ -18,8 +18,7 @@ from app.utils.telegram_utils import (
     set_telegram_webhook,
 )
 
-logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
+logger = configure_logger(__name__)
 
 
 class TelegramUpdateHandler(Protocol):

@@ -5,6 +5,9 @@ from typing import TYPE_CHECKING
 from flask import Flask, abort, render_template, request
 
 from app.telegram_bot import TelegramBotService
+from app.utils.logging_utils import configure_logger
+
+logger = configure_logger(__name__)
 
 
 def create_app(
@@ -35,7 +38,7 @@ def create_app(
         try:
             options, current_bp = get_watcher_data()
         except Exception:
-            app.logger.exception("Unable to load option watcher data.")
+            logger.exception("Unable to load option watcher data.")
             context = build_option_watcher_context()
             context["error_message"] = "Unable to load option data. Confirm that Futu OpenD is running and try again."
             return render_template("option_watcher.html", **context), 503

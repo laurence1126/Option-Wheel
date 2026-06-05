@@ -10,7 +10,7 @@ from flask import Flask
 from werkzeug.serving import BaseWSGIServer, make_server
 
 from app import create_app
-from trading.utils.logging_utils import configure_logger
+from app.utils.logging_utils import configure_logger
 
 logger = configure_logger(__name__)
 

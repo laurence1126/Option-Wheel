@@ -8,10 +8,9 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-import logging
+from app.utils.logging_utils import configure_logger
 
-logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
+logger = configure_logger(__name__)
 
 
 @dataclass(frozen=True)
