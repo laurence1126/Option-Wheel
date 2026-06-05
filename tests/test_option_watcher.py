@@ -3,9 +3,9 @@ from unittest import mock
 
 import pandas as pd
 
-from app.option_watcher import _build_delta_chart_html
-from app.option_watcher import get_close_prices
-from app.option_watcher import get_watcher_data
+from app.utils.option_watcher import _build_delta_chart_html
+from app.utils.option_watcher import get_close_prices
+from app.utils.option_watcher import get_watcher_data
 
 
 class OptionWatcherTest(unittest.TestCase):

@@ -30,8 +30,8 @@ def create_app(
 
     @app.get("/option-watcher/content")
     def option_watcher_content() -> tuple[str, int] | str:
-        from app.option_watcher import build_option_watcher_context
-        from app.option_watcher import get_watcher_data
+        from app.utils.option_watcher import build_option_watcher_context
+        from app.utils.option_watcher import get_watcher_data
 
         try:
             options, current_bp = get_watcher_data()
