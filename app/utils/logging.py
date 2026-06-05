@@ -72,9 +72,9 @@ def _file_logging_disabled() -> bool:
 def configure_logger(
     name: str,
     file_path: str | Path | None = None,
-    override: bool = True,
-    level: int = logging.INFO,
+    override: bool = False,
     daily_file: bool = True,
+    level: int = logging.INFO,
 ) -> logging.Logger:
     logger = logging.getLogger(name)
     disable_file_logging = _file_logging_disabled()
