@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from app.telegram_bot import TelegramBotService
-from app.utils.telegram_utils import TelegramConfig
+from app.utils.telegram import TelegramConfig
 
 
 class TelegramBotServiceTest(unittest.TestCase):

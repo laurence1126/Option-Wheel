@@ -17,7 +17,7 @@ from trading.notification.telegram_summary import (
     build_sell_put_summary,
     replace_summary_prompt,
 )
-from app.utils.telegram_utils import TelegramConfig
+from app.utils.telegram import TelegramConfig
 
 
 class FakeStrategy:
@@ -264,7 +264,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.assertIn("Duration: 00:01:", send_message.call_args.args[1])
         self.assertIn("short_put: FakeStrategy", send_message.call_args.args[1])
 
-    def test_start_command_sends_original_greeting(self):
+    def test_start_command_sends_current_greeting(self):
         service = self.make_service()
         service.config = self.make_config()
         service.enabled = True
@@ -272,7 +272,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
             service.handle_webhook_update({"message": {"chat": {"id": "123"}, "text": "/start"}})
 
-        send_message.assert_called_once_with(service.config, "Hello! Quant bot is online.")
+        send_message.assert_called_once_with(service.config, "Hello! 🤖 Quant bot is online.")
 
     def test_watcher_command_sends_option_watcher_link(self):
         service = self.make_service()
@@ -285,11 +285,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         send_message.assert_called_once_with(
             service.config,
             "Click the button below:",
-            reply_markup={
-                "inline_keyboard": [
-                    [{"text": "📲 Open Option Watcher", "web_app": {"url": OPTION_WATCHER_APP_URL}}]
-                ]
-            },
+            reply_markup={"inline_keyboard": [[{"text": "📲 Open Option Watcher", "web_app": {"url": OPTION_WATCHER_APP_URL}}]]},
         )
 
     def test_watcher_command_ignores_disallowed_chat(self):

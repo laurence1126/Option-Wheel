@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from flask import Flask, abort, render_template, request
 
 from app.telegram_bot import TelegramBotService
-from app.utils.logging_utils import configure_logger
+from app.utils.logging import configure_logger
 
 logger = configure_logger(__name__)
 

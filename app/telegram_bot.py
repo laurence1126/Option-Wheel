@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from app.utils.logging_utils import configure_logger
-from app.utils.telegram_utils import (
+from app.utils.logging import configure_logger
+from app.utils.telegram import (
     TelegramConfig,
     answer_telegram_callback_query,
     delete_telegram_webhook,

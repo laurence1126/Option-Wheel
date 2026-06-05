@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.utils.telegram_utils import (
+from app.utils.telegram import (
     TelegramConfig,
     answer_telegram_callback_query,
     delete_telegram_webhook,

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from futu import *
-from trading.utils.logging_utils import configure_logger
+from app.utils.logging import configure_logger
 
 logger = configure_logger(__name__)
 

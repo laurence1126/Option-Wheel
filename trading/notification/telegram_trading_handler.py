@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Callable
 import pandas as pd
 
 from app.telegram_bot import TelegramBotService
-from app.utils.telegram_utils import answer_telegram_callback_query as answer_callback_query
-from app.utils.telegram_utils import edit_telegram_message_text
+from app.utils.telegram import answer_telegram_callback_query as answer_callback_query
+from app.utils.telegram import edit_telegram_message_text
 from trading.notification.telegram_callbacks import parse_assignment_callback, parse_strategy_callback
 from trading.notification.telegram_consts import (
     BOT_COMMANDS,
@@ -25,7 +25,7 @@ from trading.notification.telegram_consts import (
 )
 from trading.notification.telegram_status import build_status_message
 from trading.notification.telegram_summary import replace_summary_prompt
-from trading.utils.logging_utils import configure_logger
+from app.utils.logging import configure_logger
 
 if TYPE_CHECKING:
     from trading.trading_engine.futu_trading_engine import FutuTradingEngine

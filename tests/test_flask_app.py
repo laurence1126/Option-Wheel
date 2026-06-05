@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from app import create_app
-from app.utils.telegram_utils import TelegramConfig
+from app.utils.telegram import TelegramConfig
 
 
 class FakeTelegramBot:

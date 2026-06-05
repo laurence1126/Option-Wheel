@@ -9,9 +9,9 @@ from futu import *
 from app.flask_app import FlaskAppService
 from trading.config import futu_config
 from trading.notification.telegram_trading_handler import TelegramTradingHandler
-from trading.trading_engine.order_execution import ExecutionResult, LimitOrderRequest, OPEN_ORDER_STATUSES, OrderExecutionService
+from trading.trading_engine.execution_engine import ExecutionResult, LimitOrderRequest, OPEN_ORDER_STATUSES, OrderExecutionService
 from trading.utils import futu_utils
-from trading.utils.logging_utils import configure_logger
+from app.utils.logging import configure_logger
 from trading.strategies.trading_strategy_base import TradingStrategyBase
 
 logger = configure_logger(__name__)

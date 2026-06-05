@@ -3,7 +3,7 @@ import unittest
 import pandas as pd
 from futu import OrderStatus, TrdSide
 
-from trading.trading_engine.order_execution import LimitOrderRequest, OrderExecutionService
+from trading.trading_engine.execution_engine import LimitOrderRequest, OrderExecutionService
 
 
 def order_update(order_id: str, status: object, dealt_qty: float, code: str = "US.TEST", qty: float = 10.0) -> pd.DataFrame:

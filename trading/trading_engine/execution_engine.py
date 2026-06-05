@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Literal
 import pandas as pd
 from futu import OrderStatus, TrdSide
 
-from trading.utils.logging_utils import configure_logger
+from app.utils.logging import configure_logger
 
 if TYPE_CHECKING:
     from trading.trading_engine.futu_trading_engine import FutuTradingEngine
