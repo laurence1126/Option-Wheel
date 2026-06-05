@@ -15,7 +15,7 @@ class OptionWatcherTest(unittest.TestCase):
         ticker = mock.Mock()
         ticker.history.return_value = pd.DataFrame({"Close": [100.0, 101.0]})
 
-        with mock.patch("app.option_watcher.yf.Ticker", return_value=ticker) as ticker_factory:
+        with mock.patch("app.utils.option_watcher.yf.Ticker", return_value=ticker) as ticker_factory:
             self.assertEqual(get_close_prices("SPY"), (100.0, 101.0))
             self.assertEqual(get_close_prices("SPY"), (100.0, 101.0))
 
@@ -30,7 +30,7 @@ class OptionWatcherTest(unittest.TestCase):
         with (
             mock.patch("trading.utils.futu_utils.create_trade_context", return_value=trade_context),
             mock.patch("trading.utils.futu_utils.create_quote_context", return_value=quote_context),
-            mock.patch("app.option_watcher.get_close_prices") as close_prices,
+            mock.patch("app.utils.option_watcher.get_close_prices") as close_prices,
         ):
             get_watcher_data()
 
@@ -47,7 +47,7 @@ class OptionWatcherTest(unittest.TestCase):
         figure = mock.Mock()
         figure.to_html.return_value = "<div>chart</div>"
 
-        with mock.patch("app.option_watcher.go.Figure", return_value=figure):
+        with mock.patch("app.utils.option_watcher.go.Figure", return_value=figure):
             chart_html = _build_delta_chart_html(options)
 
         self.assertEqual(chart_html, "<div>chart</div>")

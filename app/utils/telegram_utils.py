@@ -8,9 +8,10 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from trading.utils.logging_utils import configure_logger
+import logging
 
-logger = configure_logger(__name__)
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 @dataclass(frozen=True)
@@ -175,7 +176,7 @@ def delete_telegram_webhook(config: TelegramConfig, drop_pending_updates: bool =
     return result is not None
 
 
-def answer_callback_query(config: TelegramConfig, callback_query_id: str, text: str) -> bool:
+def answer_telegram_callback_query(config: TelegramConfig, callback_query_id: str, text: str) -> bool:
     result = _post_telegram_api(
         config,
         "answerCallbackQuery",
@@ -225,6 +226,10 @@ def set_telegram_commands_menu(config: TelegramConfig) -> bool:
         timeout_seconds=5,
     )
     return result is not None
+
+
+def is_allowed_telegram_chat(config: TelegramConfig | None, chat_id: str | int | None) -> bool:
+    return config is not None and str(chat_id) == config.chat_id
 
 
 def _post_telegram_api(config: TelegramConfig, method: str, payload: dict, timeout_seconds: int) -> dict | None:

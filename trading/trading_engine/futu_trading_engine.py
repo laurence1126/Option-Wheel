@@ -8,7 +8,7 @@ import pandas as pd
 from futu import *
 from app.flask_app import FlaskAppService
 from trading.config import futu_config
-from trading.notification.telegram_bot import TelegramBotService
+from trading.notification.telegram_trading_handler import TelegramTradingHandler
 from trading.trading_engine.order_execution import ExecutionResult, LimitOrderRequest, OPEN_ORDER_STATUSES, OrderExecutionService
 from trading.utils import futu_utils
 from trading.utils.logging_utils import configure_logger
@@ -56,8 +56,8 @@ class FutuTradingEngine:
 
         # Additional services initialization
         self.execution = OrderExecutionService(self)
-        self.telegram = TelegramBotService()
-        self.flask_app = FlaskAppService(telegram_bot_service=self.telegram)
+        self.telegram = TelegramTradingHandler()
+        self.flask_app = FlaskAppService(telegram_bot_service=self.telegram.bot)
 
         # Load trading strategies
         self.strategy = self._normalize_strategy_input(strategy)

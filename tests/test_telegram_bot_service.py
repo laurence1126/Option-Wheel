@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 import unittest
@@ -7,7 +8,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from trading.notification.telegram_bot import PendingShortPut, RESTART_ENV_VAR, TelegramBotService
+from trading.notification.telegram_trading_handler import PendingShortPut, RESTART_ENV_VAR, TelegramTradingHandler as TelegramBotService
 from trading.notification.telegram_consts import BOT_COMMANDS, HELP_TEXT, OPTION_WATCHER_APP_URL
 from trading.notification.telegram_summary import (
     build_assignment_summary,
@@ -16,7 +17,7 @@ from trading.notification.telegram_summary import (
     build_sell_put_summary,
     replace_summary_prompt,
 )
-from trading.utils.telegram_utils import TelegramConfig
+from app.utils.telegram_utils import TelegramConfig
 
 
 class FakeStrategy:
@@ -117,13 +118,13 @@ class TelegramBotServiceTest(unittest.TestCase):
         config = self.make_config()
 
         with (
-            patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
-            patch("trading.notification.telegram_bot.set_telegram_commands", return_value=True) as set_commands,
-            patch("trading.notification.telegram_bot.set_telegram_commands_menu", return_value=True) as set_menu,
-            patch("trading.notification.telegram_bot.set_telegram_webhook", return_value=True) as set_webhook,
-            patch("trading.notification.telegram_bot.delete_telegram_webhook", return_value=True),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)),
-            patch.dict("trading.notification.telegram_bot.os.environ", {}, clear=True),
+            patch("app.telegram_bot.get_telegram_config", return_value=config),
+            patch("app.telegram_bot.set_telegram_commands", return_value=True) as set_commands,
+            patch("app.telegram_bot.set_telegram_commands_menu", return_value=True) as set_menu,
+            patch("app.telegram_bot.set_telegram_webhook", return_value=True) as set_webhook,
+            patch("app.telegram_bot.delete_telegram_webhook", return_value=True),
+            patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)),
+            patch.dict("trading.notification.telegram_trading_handler.os.environ", {}, clear=True),
         ):
             service.start(FakeEngine())
             self.assertTrue(service.enabled)
@@ -151,18 +152,35 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.assertIn("watcher", [command["command"] for command in BOT_COMMANDS])
         self.assertIn("/watcher - Open the option watcher app", HELP_TEXT)
 
+    def test_start_returns_immediately_when_already_running(self):
+        service = self.make_service()
+        original_engine = FakeEngine()
+        new_engine = FakeEngine()
+        service.engine = original_engine
+        service._running = True
+
+        with (
+            patch("app.telegram_bot.get_telegram_config") as get_config,
+            patch.dict("trading.notification.telegram_trading_handler.os.environ", {RESTART_ENV_VAR: "1"}, clear=True),
+        ):
+            service.start(new_engine)
+
+            get_config.assert_not_called()
+            self.assertIs(service.engine, original_engine)
+            self.assertEqual(os.environ.get(RESTART_ENV_VAR), "1")
+
     def test_start_sends_restarted_message_after_exec_restart(self):
         service = self.make_service()
         config = self.make_config()
 
         with (
-            patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
-            patch("trading.notification.telegram_bot.set_telegram_commands", return_value=True),
-            patch("trading.notification.telegram_bot.set_telegram_commands_menu", return_value=True),
-            patch("trading.notification.telegram_bot.set_telegram_webhook", return_value=True),
-            patch("trading.notification.telegram_bot.delete_telegram_webhook", return_value=True),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
-            patch.dict("trading.notification.telegram_bot.os.environ", {RESTART_ENV_VAR: "1"}, clear=True),
+            patch("app.telegram_bot.get_telegram_config", return_value=config),
+            patch("app.telegram_bot.set_telegram_commands", return_value=True),
+            patch("app.telegram_bot.set_telegram_commands_menu", return_value=True),
+            patch("app.telegram_bot.set_telegram_webhook", return_value=True),
+            patch("app.telegram_bot.delete_telegram_webhook", return_value=True),
+            patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
+            patch.dict("trading.notification.telegram_trading_handler.os.environ", {RESTART_ENV_VAR: "1"}, clear=True),
         ):
             service.start(FakeEngine())
             service.shutdown()
@@ -174,14 +192,14 @@ class TelegramBotServiceTest(unittest.TestCase):
         config = self.make_config()
 
         with (
-            patch("trading.notification.telegram_bot.get_telegram_config", return_value=config),
-            patch("trading.notification.telegram_bot.set_telegram_commands", return_value=True),
-            patch("trading.notification.telegram_bot.set_telegram_commands_menu", return_value=True),
-            patch("trading.notification.telegram_bot.set_telegram_webhook", return_value=True),
-            patch("trading.notification.telegram_bot.delete_telegram_webhook", return_value=True),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)),
-            patch("trading.notification.telegram_bot.threading.Thread") as make_thread,
-            patch.dict("trading.notification.telegram_bot.os.environ", {RESTART_ENV_VAR: "1"}, clear=True),
+            patch("app.telegram_bot.get_telegram_config", return_value=config),
+            patch("app.telegram_bot.set_telegram_commands", return_value=True),
+            patch("app.telegram_bot.set_telegram_commands_menu", return_value=True),
+            patch("app.telegram_bot.set_telegram_webhook", return_value=True),
+            patch("app.telegram_bot.delete_telegram_webhook", return_value=True),
+            patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)),
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as make_thread,
+            patch.dict("trading.notification.telegram_trading_handler.os.environ", {RESTART_ENV_VAR: "1"}, clear=True),
         ):
             make_thread.return_value.is_alive.return_value = False
             service.start(FakeEngine())
@@ -198,7 +216,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         service._running = True
         service._pending_approvals["approval-1"] = SimpleNamespace(event=approval, result=None)
 
-        with patch("trading.notification.telegram_bot.delete_telegram_webhook", return_value=True) as delete_webhook:
+        with patch("app.telegram_bot.delete_telegram_webhook", return_value=True) as delete_webhook:
             service.shutdown()
 
         delete_webhook.assert_called_once_with(config, drop_pending_updates=True)
@@ -211,7 +229,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         service = self.make_service()
         config = self.make_config(enabled=False)
 
-        with patch("trading.notification.telegram_bot.get_telegram_config", return_value=config):
+        with patch("app.telegram_bot.get_telegram_config", return_value=config):
             service.start(FakeEngine())
 
         self.assertFalse(service.enabled)
@@ -223,9 +241,9 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
         service.engine = FakeEngine()
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
-            service._handle_message({"chat": {"id": "999"}, "text": "/status"})
-            service._handle_message({"chat": {"id": "123"}, "text": "/status"})
+        with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service.handle_webhook_update({"message": {"chat": {"id": "999"}, "text": "/status"}})
+            service.handle_webhook_update({"message": {"chat": {"id": "123"}, "text": "/status"}})
 
         self.assertEqual(send_message.call_count, 1)
         self.assertIs(send_message.call_args.args[0], service.config)
@@ -238,7 +256,7 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine = FakeEngine()
         update = {"update_id": 1, "message": {"chat": {"id": "123"}, "text": "/status"}}
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+        with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
             service.handle_webhook_update(update)
 
         self.assertEqual(send_message.call_count, 1)
@@ -246,13 +264,23 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.assertIn("Duration: 00:01:", send_message.call_args.args[1])
         self.assertIn("short_put: FakeStrategy", send_message.call_args.args[1])
 
+    def test_start_command_sends_original_greeting(self):
+        service = self.make_service()
+        service.config = self.make_config()
+        service.enabled = True
+
+        with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service.handle_webhook_update({"message": {"chat": {"id": "123"}, "text": "/start"}})
+
+        send_message.assert_called_once_with(service.config, "Hello! Quant bot is online.")
+
     def test_watcher_command_sends_option_watcher_link(self):
         service = self.make_service()
         service.config = self.make_config()
         service.enabled = True
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
-            service._handle_message({"chat": {"id": "123"}, "text": "/watcher"})
+        with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service.handle_message({"chat": {"id": "123"}, "text": "/watcher"})
 
         send_message.assert_called_once_with(
             service.config,
@@ -269,8 +297,8 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.config = self.make_config()
         service.enabled = True
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
-            service._handle_message({"chat": {"id": "999"}, "text": "/watcher"})
+        with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service.handle_webhook_update({"message": {"chat": {"id": "999"}, "text": "/watcher"}})
 
         send_message.assert_not_called()
 
@@ -280,8 +308,8 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
         service.engine = FakeEngine()
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
-            service._handle_message({"chat": {"id": "123"}, "text": "/shutdown"})
+        with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service.handle_message({"chat": {"id": "123"}, "text": "/shutdown"})
 
         self.assertFalse(service.engine._closed)
         self.assertEqual(send_message.call_count, 1)
@@ -297,11 +325,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine = FakeEngine()
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shutdown:confirm",
@@ -322,10 +350,10 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine = FakeEngine()
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True),
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True),
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True),
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True),
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shutdown:cancel",
@@ -341,8 +369,8 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
         service.engine = FakeEngine()
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
-            service._handle_message({"chat": {"id": "123"}, "text": "/restart"})
+        with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service.handle_message({"chat": {"id": "123"}, "text": "/restart"})
 
         self.assertFalse(service.engine._closed)
         self.assertEqual(send_message.call_count, 1)
@@ -358,12 +386,12 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine = FakeEngine()
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as thread,
-            patch.dict("trading.notification.telegram_bot.os.environ", {}, clear=True),
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as thread,
+            patch.dict("trading.notification.telegram_trading_handler.os.environ", {}, clear=True),
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "restart:confirm",
@@ -384,11 +412,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine = FakeEngine()
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.os.execv") as execv,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.os.execv") as execv,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "restart:cancel",
@@ -408,10 +436,10 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine = FakeEngine()
 
         with (
-            patch("trading.notification.telegram_bot.secrets.token_urlsafe", return_value="short-token"),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
+            patch("trading.notification.telegram_trading_handler.secrets.token_urlsafe", return_value="short-token"),
+            patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
         ):
-            service._handle_message({"chat": {"id": "123"}, "text": "/shortput"})
+            service.handle_message({"chat": {"id": "123"}, "text": "/shortput"})
 
         self.assertIn("short-token", service._pending_shortput_confirmations)
         send_message.assert_called_once()
@@ -427,8 +455,8 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
         service.engine = FakeEngine()
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
-            service._handle_message({"chat": {"id": "999"}, "text": "/shortput"})
+        with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service.handle_webhook_update({"message": {"chat": {"id": "999"}, "text": "/shortput"}})
 
         send_message.assert_not_called()
         self.assertEqual(service._pending_shortput_confirmations, {})
@@ -440,8 +468,8 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine = FakeEngine()
         service.engine.strategy = {"short_put": object()}
 
-        with patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
-            service._handle_message({"chat": {"id": "123"}, "text": "/shortput"})
+        with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service.handle_message({"chat": {"id": "123"}, "text": "/shortput"})
 
         self.assertEqual(service._pending_shortput_confirmations, {})
         send_message.assert_called_once_with(service.config, "Short put strategy unavailable.")
@@ -454,11 +482,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.add_pending_shortput(service)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as shortput_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as shortput_thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shortput:cancel:short-token",
@@ -493,11 +521,11 @@ class TelegramBotServiceTest(unittest.TestCase):
                 self.target(*self.args)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread", ImmediateThread),
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread", ImmediateThread),
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shortput:confirm:short-token",
@@ -523,11 +551,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.add_pending_shortput(service, seconds=-1)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as shortput_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as shortput_thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shortput:confirm:short-token",
@@ -551,11 +579,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.add_pending_shortput(service)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as shortput_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as shortput_thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shortput:confirm:short-token",
@@ -577,11 +605,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.add_pending_shortput(service)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as shortput_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as shortput_thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shortput:confirm:short-token",
@@ -602,11 +630,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.add_pending_shortput(service)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as shortput_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as shortput_thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shortput:confirm:short-token",
@@ -626,10 +654,10 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine.strategy["second_short_put"] = FakeStrategy()
 
         with (
-            patch("trading.notification.telegram_bot.secrets.token_urlsafe", return_value="short-token"),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
+            patch("trading.notification.telegram_trading_handler.secrets.token_urlsafe", return_value="short-token"),
+            patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message,
         ):
-            service._handle_message({"chat": {"id": "123"}, "text": "/shortput"})
+            service.handle_message({"chat": {"id": "123"}, "text": "/shortput"})
 
         pending = service._pending_shortput_confirmations["short-token"]
         self.assertEqual(pending.strategy_ids, ["short_put", "second_short_put"])
@@ -652,10 +680,10 @@ class TelegramBotServiceTest(unittest.TestCase):
         self.add_pending_shortput(service, strategy_ids=["short_put", "second_short_put"], selected_strategy_id=None)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shortput:select:short-token:1",
@@ -695,11 +723,11 @@ class TelegramBotServiceTest(unittest.TestCase):
                 self.target(*self.args)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread", ImmediateThread),
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread", ImmediateThread),
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shortput:confirm:short-token",
@@ -727,11 +755,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         )
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as shortput_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as shortput_thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shortput:select:short-token:1",
@@ -758,11 +786,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         )
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as shortput_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as shortput_thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "shortput:confirm:short-token",
@@ -792,11 +820,11 @@ class TelegramBotServiceTest(unittest.TestCase):
                 self.target(*self.args)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread", ImmediateThread),
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread", ImmediateThread),
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "strategy:short_put:retry:execute_short_put",
@@ -826,11 +854,11 @@ class TelegramBotServiceTest(unittest.TestCase):
                 self.target(*self.args)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread", ImmediateThread),
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread", ImmediateThread),
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "strategy:short_put:cancel",
@@ -850,15 +878,21 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine = FakeEngine()
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as retry_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as retry_thread,
         ):
-            service._handle_callback_query(
+            service.handle_webhook_update(
                 {
-                    "id": "callback-1",
-                    "data": "strategy:short_put:retry:execute_short_put",
-                    "message": {"message_id": 10, "chat": {"id": "999"}, "text": "SHORT PUT RESULT - FAILURE"},
+                    "callback_query": {
+                        "id": "callback-1",
+                        "data": "strategy:short_put:retry:execute_short_put",
+                        "message": {
+                            "message_id": 10,
+                            "chat": {"id": "999"},
+                            "text": "SHORT PUT RESULT - FAILURE",
+                        },
+                    }
                 }
             )
 
@@ -875,11 +909,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine.strategy = {}
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as retry_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as retry_thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "strategy:short_put:retry:execute_short_put",
@@ -898,11 +932,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine = FakeEngine()
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as retry_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as retry_thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "strategy:short_put:retry:missing",
@@ -931,10 +965,10 @@ class TelegramBotServiceTest(unittest.TestCase):
         )
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "assignment:short_put:liquidate:token-1",
@@ -976,10 +1010,10 @@ class TelegramBotServiceTest(unittest.TestCase):
         )
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "assignment:short_put:market_order:token-1",
@@ -1002,11 +1036,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"] = "market_order_executing"
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as assignment_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as assignment_thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "assignment:short_put:market_order:token-1",
@@ -1037,11 +1071,11 @@ class TelegramBotServiceTest(unittest.TestCase):
                 self.target(*self.args)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread", ImmediateThread),
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread", ImmediateThread),
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "assignment:short_put:market_order:token-1",
@@ -1061,11 +1095,11 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["expires_at"] = pd.Timestamp.now() - pd.Timedelta(seconds=1)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread") as assignment_thread,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread") as assignment_thread,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "assignment:short_put:market_order:token-1",
@@ -1107,11 +1141,11 @@ class TelegramBotServiceTest(unittest.TestCase):
                 self.target(*self.args)
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_bot.threading.Thread", ImmediateThread),
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.threading.Thread", ImmediateThread),
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "assignment:short_put:price_ladder:token-1",
@@ -1142,10 +1176,10 @@ class TelegramBotServiceTest(unittest.TestCase):
         )
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "assignment:short_put:cancel:token-1",
@@ -1165,17 +1199,17 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
 
         with (
-            patch("trading.notification.telegram_bot.secrets.token_urlsafe", return_value="abc"),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 10)),
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True),
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.secrets.token_urlsafe", return_value="abc"),
+            patch("app.telegram_bot.send_telegram_message", return_value=(True, 10)),
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True),
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
         ):
             result_holder = {}
             summary = "<b>Trade</b>\nDetails stay visible\n\n🫡 Approve this trade?"
             thread = threading.Thread(target=lambda: result_holder.setdefault("result", service.request_trade_approval(summary, 2)))
             thread.start()
             self.wait_for_pending_approval(service, "abc")
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "approve:abc",
@@ -1195,17 +1229,17 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
 
         with (
-            patch("trading.notification.telegram_bot.secrets.token_urlsafe", return_value="abc"),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 10)),
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True),
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.secrets.token_urlsafe", return_value="abc"),
+            patch("app.telegram_bot.send_telegram_message", return_value=(True, 10)),
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True),
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
         ):
             result_holder = {}
             summary = "<b>Cut Loss</b>\nOrder details stay visible\n\n🫡 Approve this cut-loss order?"
             thread = threading.Thread(target=lambda: result_holder.setdefault("result", service.request_trade_approval(summary, 2)))
             thread.start()
             self.wait_for_pending_approval(service, "abc")
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "reject:abc",
@@ -1225,9 +1259,9 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
 
         with (
-            patch("trading.notification.telegram_bot.secrets.token_urlsafe", return_value="abc"),
-            patch("trading.notification.telegram_bot.send_telegram_message", return_value=(True, 10)) as send_message,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.secrets.token_urlsafe", return_value="abc"),
+            patch("app.telegram_bot.send_telegram_message", return_value=(True, 10)) as send_message,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
         ):
             summary = "<b>Trade</b>\nOrder details stay visible\n\n🫡 Approve this trade?"
             approved = service.request_trade_approval(summary, 0)
@@ -1247,10 +1281,10 @@ class TelegramBotServiceTest(unittest.TestCase):
         service.enabled = True
 
         with (
-            patch("trading.notification.telegram_bot.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_bot.edit_telegram_message_text", return_value=True) as edit_message,
+            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
+            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
         ):
-            service._handle_callback_query(
+            service.handle_callback_query(
                 {
                     "id": "callback-1",
                     "data": "approve:expired",

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-import sys
 import secrets
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +10,9 @@ from typing import TYPE_CHECKING, Callable
 
 import pandas as pd
 
+from app.telegram_bot import TelegramBotService
+from app.utils.telegram_utils import answer_telegram_callback_query as answer_callback_query
+from app.utils.telegram_utils import edit_telegram_message_text
 from trading.notification.telegram_callbacks import parse_assignment_callback, parse_strategy_callback
 from trading.notification.telegram_consts import (
     BOT_COMMANDS,
@@ -23,18 +26,6 @@ from trading.notification.telegram_consts import (
 from trading.notification.telegram_status import build_status_message
 from trading.notification.telegram_summary import replace_summary_prompt
 from trading.utils.logging_utils import configure_logger
-from trading.utils.telegram_utils import (
-    TelegramConfig,
-    answer_callback_query,
-    delete_telegram_webhook,
-    edit_telegram_message_text,
-    get_telegram_config,
-    send_telegram_document,
-    send_telegram_message,
-    set_telegram_commands,
-    set_telegram_commands_menu,
-    set_telegram_webhook,
-)
 
 if TYPE_CHECKING:
     from trading.trading_engine.futu_trading_engine import FutuTradingEngine
@@ -56,18 +47,14 @@ class PendingShortPut:
     selected_strategy_id: str | None = None
 
 
-class TelegramBotService:
+class TelegramTradingHandler:
     def __init__(
         self,
         config_path: str = ".config",
     ) -> None:
-        self.config_path = config_path
-
-        self.config: TelegramConfig | None = None
+        self.bot = TelegramBotService(config_path=config_path, handler=self)
         self.engine: FutuTradingEngine | None = None
-        self.enabled = False
 
-        self._running = False
         self._shortput_running = False
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._pending_shortput_confirmations: dict[str, PendingShortPut] = {}
@@ -78,43 +65,17 @@ class TelegramBotService:
     ####################################################################################################
 
     def send_message(self, text: str, reply_markup: dict | None = None, parse_mode: str | None = None) -> bool:
-        if not self.enabled or self.config is None:
-            logger.warning("Telegram message unavailable because Telegram bot service is disabled.")
-            return False
-
-        sent, _ = send_telegram_message(config=self.config, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
-        return sent
+        return self.bot.send_message(text, reply_markup=reply_markup, parse_mode=parse_mode)
 
     def start(self, engine: FutuTradingEngine) -> None:
-        if self._running:
+        if self.bot._running:
             return
 
         self.engine = engine
-        self.config = get_telegram_config(self.config_path)
+
         was_restarted = os.environ.pop(RESTART_ENV_VAR, None) == "1"
-        if not self.config.enabled:
-            self.enabled = False
-            logger.info("Telegram bot service disabled by config.")
-            return
-
-        set_telegram_commands(self.config, BOT_COMMANDS)
-        set_telegram_commands_menu(self.config)
-        if not set_telegram_webhook(
-            self.config,
-            url=self.config.webhook_url,
-            secret_token=self.config.webhook_secret_token,
-            drop_pending_updates=True,
-        ):
-            raise RuntimeError("Telegram webhook registration failed.")
-
-        if was_restarted:
-            send_telegram_message(self.config, "Trading engine restart complete 🎉")
-        else:
-            send_telegram_message(self.config, "Trading engine started 🎊")
-
-        self.enabled = True
-        self._running = True
-        logger.info("Telegram bot service started with webhook: url=%s.", self.config.webhook_url)
+        startup_message = "Trading engine restart complete 🎉" if was_restarted else "Trading engine started 🎊"
+        self.bot.start(startup_message=startup_message, commands=BOT_COMMANDS)
 
     def shutdown(self) -> None:
         with self._lock:
@@ -125,14 +86,10 @@ class TelegramBotService:
             approval.result = False
             approval.event.set()
 
-        if self.config is not None and self.enabled:
-            delete_telegram_webhook(self.config, drop_pending_updates=True)
-        self._running = False
-        self.enabled = False
-        logger.info("Telegram bot service stopped.")
+        self.bot.shutdown()
 
     def request_trade_approval(self, summary: str, timeout_seconds: int) -> bool:
-        if not self.enabled or self.config is None:
+        if not self.bot.enabled or self.bot.config is None:
             logger.warning("Telegram trade approval unavailable because Telegram bot service is disabled.")
             return False
 
@@ -149,7 +106,7 @@ class TelegramBotService:
                 ]
             ]
         }
-        sent, message_id = send_telegram_message(self.config, summary, reply_markup=reply_markup, parse_mode="HTML")
+        sent, message_id = self.bot.send_message_with_id(summary, reply_markup=reply_markup, parse_mode="HTML")
         if not sent:
             with self._lock:
                 self._pending_approvals.pop(approval_id, None)
@@ -162,8 +119,8 @@ class TelegramBotService:
         if not approved_in_time:
             logger.warning("Telegram trade approval timed out: approval_id=%s, timeout_seconds=%s.", approval_id, timeout_seconds)
             edit_telegram_message_text(
-                self.config,
-                chat_id=self.config.chat_id,
+                self.bot.config,
+                chat_id=self.bot.config.chat_id,
                 message_id=message_id,
                 text=replace_summary_prompt(summary, "⚠️ Trade approval timed out."),
                 parse_mode="HTML",
@@ -172,42 +129,50 @@ class TelegramBotService:
             return False
         return approval.result is True
 
+    @property
+    def config(self):
+        return self.bot.config
+
+    @config.setter
+    def config(self, value) -> None:
+        self.bot.config = value
+
+    @property
+    def enabled(self) -> bool:
+        return self.bot.enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self.bot.enabled = value
+
+    @property
+    def _running(self) -> bool:
+        return self.bot._running
+
+    @_running.setter
+    def _running(self, value: bool) -> None:
+        self.bot._running = value
+
     def handle_webhook_update(self, update: dict) -> None:
-        if not self.enabled or self.config is None:
-            logger.warning("Telegram webhook update ignored because Telegram bot service is disabled.")
-            return
-        self._handle_update(update)
+        self.bot.handle_webhook_update(update)
 
     ####################################################################################################
     # Update / Callback Dispatch Handlers
     ####################################################################################################
 
-    def _handle_update(self, update: dict) -> None:
-        if "message" in update:
-            self._handle_message(update["message"])
-            return
-
-        if "callback_query" in update:
-            self._handle_callback_query(update["callback_query"])
-
-    def _handle_message(self, message: dict) -> None:
-        chat = message.get("chat", {})
-        chat_id = str(chat.get("id"))
-        if not self._is_allowed_chat(chat_id):
-            return
-
+    def handle_message(self, message: dict) -> None:
         text = str(message.get("text", "")).strip()
         command = text.split(maxsplit=1)[0].lower()
         if command == "/start":
-            send_telegram_message(self.config, "Hello! Quant bot is online.")
+            self.bot.send_message("Hello! 🤖 Quant bot is online.")
         elif command == "/help":
-            send_telegram_message(self.config, HELP_TEXT, parse_mode="HTML")
+            self.bot.send_message(HELP_TEXT, parse_mode="HTML")
         elif command == "/status":
-            send_telegram_message(self.config, build_status_message(self.engine), parse_mode="HTML")
+            self.bot.send_message(build_status_message(self.engine), parse_mode="HTML")
         elif command == "/watcher":
             watcher_url = OPTION_WATCHER_APP_URL
             reply_markup = {"inline_keyboard": [[{"text": "📲 Open Option Watcher", "web_app": {"url": watcher_url}}]]}
-            send_telegram_message(self.config, "Click the button below:", reply_markup=reply_markup)
+            self.bot.send_message("Click the button below:", reply_markup=reply_markup)
         elif command == "/log":
             latest_log = None
             latest_key = None
@@ -220,9 +185,9 @@ class TelegramBotService:
                     latest_key = current_key
                     latest_log = log_file
             if latest_log is None:
-                send_telegram_message(self.config, "☹️ No log files found.")
-            elif not send_telegram_document(self.config, latest_log, caption=f"Latest log file: {latest_log.name}"):
-                send_telegram_message(self.config, "😰 Failed to send latest log file.")
+                self.bot.send_message("☹️ No log files found.")
+            elif not self.bot.send_document(latest_log, caption=f"Latest log file: {latest_log.name}"):
+                self.bot.send_message("😰 Failed to send latest log file.")
         elif command == "/shortput":
             self._request_shortput_confirmation()
         elif command == "/shutdown":
@@ -230,13 +195,9 @@ class TelegramBotService:
         elif command == "/restart":
             self._request_restart_confirmation()
 
-    def _handle_callback_query(self, callback_query: dict) -> None:
+    def handle_callback_query(self, callback_query: dict) -> None:
         message = callback_query.get("message", {})
-        chat = message.get("chat", {})
-        chat_id = str(chat.get("id"))
-        if not self._is_allowed_chat(chat_id):
-            return
-
+        chat_id = str(message.get("chat", {}).get("id"))
         callback_query_id = str(callback_query.get("id"))
         message_id = int(message.get("message_id"))
         data = str(callback_query.get("data", ""))
@@ -467,11 +428,7 @@ class TelegramBotService:
                 ]
             ]
         }
-        send_telegram_message(
-            self.config,
-            "⚠️ Confirm trading engine shutdown?",
-            reply_markup=reply_markup,
-        )
+        self.bot.send_message("⚠️ Confirm trading engine shutdown?", reply_markup=reply_markup)
 
     def _confirm_shutdown(self, callback_query_id: str, chat_id: str, message_id: int) -> None:
         answer_callback_query(self.config, callback_query_id, "Shutdown confirmed")
@@ -494,11 +451,7 @@ class TelegramBotService:
                 ]
             ]
         }
-        send_telegram_message(
-            self.config,
-            "⚠️ Confirm trading engine restart?",
-            reply_markup=reply_markup,
-        )
+        self.bot.send_message("⚠️ Confirm trading engine restart?", reply_markup=reply_markup)
 
     def _confirm_restart(self, callback_query_id: str, chat_id: str, message_id: int) -> None:
         answer_callback_query(self.config, callback_query_id, "Restart confirmed")
@@ -519,7 +472,7 @@ class TelegramBotService:
 
         matches, unavailable_reason = self._find_shortput_actions()
         if unavailable_reason is not None or not matches:
-            send_telegram_message(self.config, unavailable_reason or "Short put strategy unavailable.")
+            self.bot.send_message(unavailable_reason or "Short put strategy unavailable.")
             return
 
         token = secrets.token_urlsafe(8)
@@ -539,11 +492,7 @@ class TelegramBotService:
                 ]
                 + [[{"text": "❌ Cancel", "callback_data": f"shortput:cancel:{token}"}]]
             }
-            send_telegram_message(
-                self.config,
-                "Which strategy ID would you want to execute short put?",
-                reply_markup=reply_markup,
-            )
+            self.bot.send_message("Which strategy ID would you want to execute short put?", reply_markup=reply_markup)
             return
 
         reply_markup = {
@@ -554,8 +503,7 @@ class TelegramBotService:
                 ]
             ]
         }
-        send_telegram_message(
-            self.config,
+        self.bot.send_message(
             f"⚠️ Confirm short put strategy execution?\n💸 Strategy ID: {strategy_ids[0]}",
             reply_markup=reply_markup,
         )
@@ -868,10 +816,3 @@ class TelegramBotService:
 
     def _run_process_control_in_background(self, target: Callable[[], None], name: str) -> None:
         threading.Thread(target=target, name=name, daemon=True).start()
-
-    ####################################################################################################
-    # Internal Utilities
-    ####################################################################################################
-
-    def _is_allowed_chat(self, chat_id: str) -> bool:
-        return self.config is not None and chat_id == self.config.chat_id

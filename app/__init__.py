@@ -4,8 +4,7 @@ import secrets
 from typing import TYPE_CHECKING
 from flask import Flask, abort, render_template, request
 
-if TYPE_CHECKING:
-    from trading.notification.telegram_bot import TelegramBotService
+from app.telegram_bot import TelegramBotService
 
 
 def create_app(

@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from app import create_app
-from trading.utils.telegram_utils import TelegramConfig
+from app.utils.telegram_utils import TelegramConfig
 
 
 class FakeTelegramBot:
@@ -37,7 +37,7 @@ class FlaskAppTest(unittest.TestCase):
     def test_option_watcher_page_renders_loading_animation_without_loading_data(self) -> None:
         app = create_app()
 
-        with patch("app.option_watcher.get_watcher_data") as get_watcher_data, app.test_client() as client:
+        with patch("app.utils.option_watcher.get_watcher_data") as get_watcher_data, app.test_client() as client:
             response = client.get("/option-watcher")
 
         self.assertEqual(response.status_code, 200)
@@ -65,7 +65,7 @@ class FlaskAppTest(unittest.TestCase):
         ).set_index("TICKER")
         app = create_app()
 
-        with patch("app.option_watcher.get_watcher_data", return_value=(options, 100_000.0)), app.test_client() as client:
+        with patch("app.utils.option_watcher.get_watcher_data", return_value=(options, 100_000.0)), app.test_client() as client:
             response = client.get("/option-watcher/content")
 
         self.assertEqual(response.status_code, 200)
@@ -84,7 +84,7 @@ class FlaskAppTest(unittest.TestCase):
     def test_option_watcher_page_handles_empty_position_list(self) -> None:
         app = create_app()
 
-        with patch("app.option_watcher.get_watcher_data", return_value=(pd.DataFrame(), 100_000.0)), app.test_client() as client:
+        with patch("app.utils.option_watcher.get_watcher_data", return_value=(pd.DataFrame(), 100_000.0)), app.test_client() as client:
             response = client.get("/option-watcher/content")
 
         self.assertEqual(response.status_code, 200)
@@ -96,7 +96,7 @@ class FlaskAppTest(unittest.TestCase):
 
         app = create_app()
 
-        with patch("app.option_watcher.get_watcher_data", side_effect=fail_to_load_watcher), app.test_client() as client:
+        with patch("app.utils.option_watcher.get_watcher_data", side_effect=fail_to_load_watcher), app.test_client() as client:
             response = client.get("/option-watcher/content")
 
         self.assertEqual(response.status_code, 503)

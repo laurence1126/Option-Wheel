@@ -4,12 +4,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from trading.utils.telegram_utils import (
+from app.utils.telegram_utils import (
     TelegramConfig,
-    answer_callback_query,
+    answer_telegram_callback_query,
     delete_telegram_webhook,
     edit_telegram_message_text,
     get_telegram_config,
+    is_allowed_telegram_chat,
     send_telegram_message,
     set_telegram_commands,
     set_telegram_commands_menu,
@@ -40,8 +41,7 @@ class TelegramUtilsTest(unittest.TestCase):
         return str(config_path)
 
     def test_get_telegram_config_reads_config_file(self):
-        config_path = self.write_config(
-            """
+        config_path = self.write_config("""
 [telegram]
 bot_token = token123
 chat_id = chat456
@@ -49,8 +49,7 @@ enabled = yes
 webhook_base_url = https://option-wheel.ubuntu-nuc.com:8443/telegram/webhook
 webhook_path_secret = telegram-secret-path
 webhook_secret_token = telegram-secret-token
-"""
-        )
+""")
 
         config = get_telegram_config(config_path)
 
@@ -63,14 +62,12 @@ webhook_secret_token = telegram-secret-token
         self.assertEqual(config.webhook_url, "https://option-wheel.ubuntu-nuc.com:8443/telegram/webhook/telegram-secret-path")
 
     def test_get_telegram_config_requires_webhook_fields(self):
-        config_path = self.write_config(
-            """
+        config_path = self.write_config("""
 [telegram]
 bot_token = token123
 chat_id = chat456
 enabled = yes
-"""
-        )
+""")
 
         with self.assertRaisesRegex(KeyError, "webhook_base_url"):
             get_telegram_config(config_path)
@@ -89,7 +86,7 @@ enabled = yes
         config = self.make_config(enabled=False)
 
         with patch(
-            "trading.utils.telegram_utils.urllib.request.urlopen",
+            "app.utils.telegram_utils.urllib.request.urlopen",
             return_value=FakeTelegramResponse({"ok": True, "result": {"message_id": 11}}),
         ) as urlopen:
             sent = send_telegram_message(config, "hello")
@@ -97,11 +94,19 @@ enabled = yes
         self.assertEqual(sent, (True, 11))
         urlopen.assert_called_once()
 
+    def test_is_allowed_telegram_chat_matches_configured_chat_id(self):
+        config = self.make_config()
+
+        self.assertTrue(is_allowed_telegram_chat(config, "chat456"))
+        self.assertFalse(is_allowed_telegram_chat(config, 456))
+        self.assertFalse(is_allowed_telegram_chat(config, "wrong"))
+        self.assertFalse(is_allowed_telegram_chat(None, "chat456"))
+
     def test_send_telegram_message_returns_true_when_api_returns_ok(self):
         config = self.make_config()
 
         with patch(
-            "trading.utils.telegram_utils.urllib.request.urlopen",
+            "app.utils.telegram_utils.urllib.request.urlopen",
             return_value=FakeTelegramResponse({"ok": True, "result": {"message_id": 11}}),
         ) as urlopen:
             sent = send_telegram_message(config, "hello")
@@ -118,7 +123,7 @@ enabled = yes
         reply_markup = {"inline_keyboard": [[{"text": "Approve", "callback_data": "approve"}]]}
 
         with patch(
-            "trading.utils.telegram_utils.urllib.request.urlopen",
+            "app.utils.telegram_utils.urllib.request.urlopen",
             return_value=FakeTelegramResponse({"ok": True, "result": {"message_id": 11}}),
         ) as urlopen:
             sent = send_telegram_message(config, "choose", reply_markup=reply_markup)
@@ -132,7 +137,7 @@ enabled = yes
         config = self.make_config()
 
         with patch(
-            "trading.utils.telegram_utils.urllib.request.urlopen",
+            "app.utils.telegram_utils.urllib.request.urlopen",
             return_value=FakeTelegramResponse({"ok": True, "result": {"message_id": 11}}),
         ) as urlopen:
             sent = send_telegram_message(config, "<b>hello</b>", parse_mode="HTML")
@@ -146,7 +151,7 @@ enabled = yes
         config = self.make_config()
 
         with patch(
-            "trading.utils.telegram_utils.urllib.request.urlopen",
+            "app.utils.telegram_utils.urllib.request.urlopen",
             return_value=FakeTelegramResponse({"ok": False, "description": "Bad Request"}),
         ):
             sent = send_telegram_message(config, "hello")
@@ -156,7 +161,7 @@ enabled = yes
     def test_send_telegram_message_returns_false_when_message_id_missing(self):
         config = self.make_config()
 
-        with patch("trading.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True, "result": {}})):
+        with patch("app.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True, "result": {}})):
             sent = send_telegram_message(config, "hello")
 
         self.assertEqual(sent, (False, None))
@@ -164,7 +169,7 @@ enabled = yes
     def test_set_telegram_webhook_posts_webhook_configuration(self):
         config = self.make_config()
 
-        with patch("trading.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True, "result": True})) as urlopen:
+        with patch("app.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True, "result": True})) as urlopen:
             configured = set_telegram_webhook(config, config.webhook_url, config.webhook_secret_token)
 
         self.assertTrue(configured)
@@ -180,7 +185,7 @@ enabled = yes
     def test_delete_telegram_webhook_drops_pending_updates(self):
         config = self.make_config()
 
-        with patch("trading.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True, "result": True})) as urlopen:
+        with patch("app.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True, "result": True})) as urlopen:
             deleted = delete_telegram_webhook(config)
 
         self.assertTrue(deleted)
@@ -192,8 +197,8 @@ enabled = yes
     def test_answer_callback_query_posts_callback_id_and_text(self):
         config = self.make_config()
 
-        with patch("trading.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True})) as urlopen:
-            answered = answer_callback_query(config, "callback-1", "Approved")
+        with patch("app.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True})) as urlopen:
+            answered = answer_telegram_callback_query(config, "callback-1", "Approved")
 
         self.assertTrue(answered)
         request = urlopen.call_args.args[0]
@@ -204,7 +209,7 @@ enabled = yes
     def test_edit_telegram_message_text_includes_parse_mode(self):
         config = self.make_config()
 
-        with patch("trading.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True})) as urlopen:
+        with patch("app.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True})) as urlopen:
             edited = edit_telegram_message_text(
                 config,
                 chat_id="123",
@@ -228,7 +233,7 @@ enabled = yes
         config = self.make_config()
         commands = [{"command": "help", "description": "Show commands"}]
 
-        with patch("trading.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True})) as urlopen:
+        with patch("app.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True})) as urlopen:
             configured = set_telegram_commands(config, commands)
 
         self.assertTrue(configured)
@@ -240,7 +245,7 @@ enabled = yes
     def test_set_telegram_commands_menu_posts_commands_menu_button(self):
         config = self.make_config()
 
-        with patch("trading.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True})) as urlopen:
+        with patch("app.utils.telegram_utils.urllib.request.urlopen", return_value=FakeTelegramResponse({"ok": True})) as urlopen:
             configured = set_telegram_commands_menu(config)
 
         self.assertTrue(configured)
