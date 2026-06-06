@@ -5,7 +5,7 @@ import pandas as pd
 from futu import SubType, TrdEnv, TrdSide
 
 from trading.config.trading_config import ShortPutLiveConfig
-from trading.trading_engine.execution_engine import ExecutionResult, LimitOrderRequest, build_price_ladder
+from trading.trading_engine.execution_engine import ExecutionResult, LimitOrderRequest, PriceLadderPlan, build_price_ladder
 from trading.strategies.short_put_strategy.assignment import alert_assignment_at_close
 from trading.strategies.short_put_strategy.cut_loss import setup_cut_loss_monitor
 from trading.strategies.short_put_strategy.short_put import (
@@ -16,6 +16,16 @@ from trading.strategies.short_put_strategy.short_put import (
 from trading.strategies.short_put_strategy.strategy_main import ShortPutStrategy
 from trading.strategies.short_put_strategy.utils.account_state import update_put_position
 from trading.strategies.short_put_strategy.utils.option_parsing import resolve_option_info, resolve_option_name
+
+
+def make_sell_put_ladder_plan(prices: tuple[float, ...] = (2.33, 2.26)) -> PriceLadderPlan:
+    return PriceLadderPlan(
+        prices=prices,
+        side="sell",
+        ref_bid=2.26,
+        ref_ask=2.4,
+        price_tick=0.01,
+    )
 
 
 class FakeEngine:
@@ -263,7 +273,12 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         self.assertEqual(request.code, "US.SPY260527P723000")
         self.assertEqual(request.side, TrdSide.SELL)
         self.assertEqual(request.qty, 20)
-        self.assertEqual(request.price, [2.33, 2.26])
+        self.assertIsInstance(request.price_ladder_plan, PriceLadderPlan)
+        self.assertEqual(request.price_ladder_plan.prices, (2.33, 2.26))
+        self.assertEqual(request.price_ladder_plan.side, "sell")
+        self.assertEqual(request.price_ladder_plan.ref_bid, 2.26)
+        self.assertEqual(request.price_ladder_plan.ref_ask, 2.4)
+        self.assertEqual(request.price_ladder_plan.ref_mid, 2.33)
         self.assertIsNone(request.remark)
 
     def test_setup_time_triggers_adds_cut_loss_prepare_at_920(self):
@@ -321,7 +336,7 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
 
         self.assertIsNotNone(requests)
         self.assertEqual([request.qty for request in requests], [30, 30, 20])
-        self.assertTrue(all(request.price == [2.33, 2.26] for request in requests))
+        self.assertTrue(all(request.price_ladder_plan.prices == (2.33, 2.26) for request in requests))
 
     def test_short_put_execution_checklist_splits_by_participation_cap(self):
         strategy, _ = self.make_strategy()
@@ -374,7 +389,7 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
     def test_buy_price_ladder_moves_from_mid_to_ask(self):
         strategy, _ = self.make_strategy()
 
-        prices = build_price_ladder(
+        plan = build_price_ladder(
             side="buy",
             code="US.SPY260527P723000",
             bid_price=2.26,
@@ -383,12 +398,15 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
             steps=strategy.config.price_ladder_steps,
         )
 
-        self.assertEqual(prices, [2.33, 2.4])
+        self.assertEqual(list(plan.prices), [2.33, 2.4])
+        self.assertEqual(plan.side, "buy")
+        self.assertEqual(plan.ref_bid, 2.26)
+        self.assertEqual(plan.ref_ask, 2.4)
 
     def test_price_ladders_round_directionally_to_tick(self):
         strategy, _ = self.make_strategy()
 
-        sell_prices = build_price_ladder(
+        sell_plan = build_price_ladder(
             side="sell",
             code="US.TEST",
             bid_price=1.01,
@@ -396,7 +414,7 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
             price_tick=0.02,
             steps=strategy.config.price_ladder_steps,
         )
-        buy_prices = build_price_ladder(
+        buy_plan = build_price_ladder(
             side="buy",
             code="US.TEST",
             bid_price=1.01,
@@ -405,8 +423,8 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
             steps=strategy.config.price_ladder_steps,
         )
 
-        self.assertEqual(sell_prices, [1.02, 1.01])
-        self.assertEqual(buy_prices, [1.04])
+        self.assertEqual(list(sell_plan.prices), [1.02, 1.01])
+        self.assertEqual(list(buy_plan.prices), [1.04])
 
     def test_execute_short_put_strategy_delegates_execution_to_engine(self):
         strategy, engine = self.make_strategy()
@@ -423,7 +441,8 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         requests = [execution_call["request"] for execution_call in engine.execution_calls]
         self.assertEqual([request.qty for request in requests], [30, 30, 20])
         self.assertTrue(all(request.code == "US.SPY260527P723000" for request in requests))
-        self.assertTrue(all(request.price == [2.33, 2.26] for request in requests))
+        self.assertTrue(all(isinstance(request.price_ladder_plan, PriceLadderPlan) for request in requests))
+        self.assertTrue(all(request.price_ladder_plan.prices == (2.33, 2.26) for request in requests))
         self.assertTrue(all(execution_call["order_wait_seconds"] == 7 for execution_call in engine.execution_calls))
         self.assertTrue(all(execution_call["cancel_wait_seconds"] == 9 for execution_call in engine.execution_calls))
         self.assertEqual(len(engine.telegram.approval_calls), 1)
@@ -481,7 +500,9 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         request = engine.execution_calls[0]["request"]
         self.assertEqual(request.side, TrdSide.BUY)
         self.assertEqual(request.qty, 12)
-        self.assertEqual(request.price, [1.5, 1.51])
+        self.assertIsInstance(request.price_ladder_plan, PriceLadderPlan)
+        self.assertEqual(request.price_ladder_plan.prices, (1.5, 1.51))
+        self.assertEqual(request.price_ladder_plan.side, "buy")
         self.assertEqual(request.remark, "cut_loss")
         self.assertEqual(engine.telegram.approval_calls, [])
         self.assertEqual(len(engine.telegram.messages), 2)
@@ -599,9 +620,27 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         strategy, engine = self.make_strategy()
         strategy.config.telegram_approval["short_put"] = True
         execution_requests = [
-            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=30, price=[2.33, 2.26]),
-            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=30, price=[2.33, 2.26]),
-            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=20, price=[2.33, 2.26]),
+            LimitOrderRequest(
+                acc_id=200,
+                code="US.SPY260527P723000",
+                side=TrdSide.SELL,
+                qty=30,
+                price_ladder_plan=make_sell_put_ladder_plan(),
+            ),
+            LimitOrderRequest(
+                acc_id=200,
+                code="US.SPY260527P723000",
+                side=TrdSide.SELL,
+                qty=30,
+                price_ladder_plan=make_sell_put_ladder_plan(),
+            ),
+            LimitOrderRequest(
+                acc_id=200,
+                code="US.SPY260527P723000",
+                side=TrdSide.SELL,
+                qty=20,
+                price_ladder_plan=make_sell_put_ladder_plan(),
+            ),
         ]
         engine.telegram.approval_result = False
 
@@ -620,9 +659,27 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         strategy, engine = self.make_strategy()
         strategy.config.telegram_approval["short_put"] = False
         execution_requests = [
-            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=30, price=[2.33, 2.26]),
-            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=30, price=[2.33, 2.26]),
-            LimitOrderRequest(acc_id=200, code="US.SPY260527P723000", side=TrdSide.SELL, qty=20, price=[2.33, 2.26]),
+            LimitOrderRequest(
+                acc_id=200,
+                code="US.SPY260527P723000",
+                side=TrdSide.SELL,
+                qty=30,
+                price_ladder_plan=make_sell_put_ladder_plan(),
+            ),
+            LimitOrderRequest(
+                acc_id=200,
+                code="US.SPY260527P723000",
+                side=TrdSide.SELL,
+                qty=30,
+                price_ladder_plan=make_sell_put_ladder_plan(),
+            ),
+            LimitOrderRequest(
+                acc_id=200,
+                code="US.SPY260527P723000",
+                side=TrdSide.SELL,
+                qty=20,
+                price_ladder_plan=make_sell_put_ladder_plan(),
+            ),
         ]
 
         with (

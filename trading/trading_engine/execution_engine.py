@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import threading
+import pandas as pd
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from typing import TYPE_CHECKING, Literal
-
-import pandas as pd
 from futu import OrderStatus, TrdSide
 
 from app.utils.logging import configure_logger
@@ -43,6 +42,29 @@ def round_up_to_tick(price: float, price_tick: float) -> float:
     return float((Decimal(str(price)) / tick).to_integral_value(rounding=ROUND_CEILING) * tick)
 
 
+@dataclass
+class PriceLadderPlan:
+    prices: tuple[float, ...]
+    side: Literal["buy", "sell"]
+    ref_bid: float
+    ref_ask: float
+    price_tick: float
+
+    @property
+    def ref_mid(self) -> float:
+        return (self.ref_bid + self.ref_ask) / 2
+
+
+@dataclass
+class LimitOrderRequest:
+    acc_id: str | int
+    code: str
+    side: TrdSide
+    qty: int
+    price_ladder_plan: PriceLadderPlan
+    remark: str | None = None
+
+
 def build_price_ladder(
     side: Literal["buy", "sell"],
     code: str,
@@ -50,7 +72,7 @@ def build_price_ladder(
     ask_price: float,
     price_tick: float,
     steps: tuple[float, ...],
-) -> list[float]:
+) -> PriceLadderPlan:
     mid_price = (bid_price + ask_price) / 2
     spread = ask_price - bid_price
     prices = []
@@ -67,17 +89,13 @@ def build_price_ladder(
             prices.append(price)
 
     logger.info("Built %s price ladder: code=%s, prices=%s", side, code, prices)
-    return prices
-
-
-@dataclass
-class LimitOrderRequest:
-    acc_id: str | int
-    code: str
-    side: TrdSide
-    qty: int
-    price: float | list[float]
-    remark: str | None = None
+    return PriceLadderPlan(
+        prices=tuple(prices),
+        side=side,
+        ref_bid=bid_price,
+        ref_ask=ask_price,
+        price_tick=price_tick,
+    )
 
 
 @dataclass
@@ -162,7 +180,7 @@ class OrderExecutionService:
         cancel_wait_seconds: int,
         fill_outside_rth: bool = None,
     ) -> ExecutionResult:
-        prices = request.price if isinstance(request.price, list) else [request.price]
+        prices = list(request.price_ladder_plan.prices)
         fill_tracker = FillTracker(target_qty=request.qty)
         last_order_id = None
         if not prices:
@@ -183,6 +201,7 @@ class OrderExecutionService:
                 logger.info("Limit ladder completed: code=%s, filled_qty=%s.", request.code, fill_tracker.total_filled_qty)
                 return self._filled_result(request, last_order_id, OrderStatus.FILLED_ALL, fill_tracker.total_filled_qty)
 
+            self._refresh_dynamic_ladder_prices(request, prices, price_index)
             order_id = self.engine.place_limit_order(
                 acc_id=request.acc_id,
                 code=request.code,
@@ -227,7 +246,9 @@ class OrderExecutionService:
                         wait_result.dealt_qty,
                         fill_tracker.remaining_qty,
                     )
-                    price_index += 1
+                    next_price_index = price_index + 1
+                    self._refresh_dynamic_ladder_prices(request, prices, next_price_index)
+                    price_index = next_price_index
                     break
 
                 next_price_index = price_index + 1
@@ -252,6 +273,7 @@ class OrderExecutionService:
                     price_index = next_price_index
                     break
 
+                self._refresh_dynamic_ladder_prices(request, prices, next_price_index)
                 next_price = prices[next_price_index]
                 modified = self.engine.modify_limit_order(
                     acc_id=request.acc_id,
@@ -331,6 +353,68 @@ class OrderExecutionService:
             message="Price ladder exhausted without fill.",
         )
 
+    def _refresh_dynamic_ladder_prices(self, request: LimitOrderRequest, prices: list[float], start_price_index: int) -> None:
+        plan = request.price_ladder_plan
+        if start_price_index >= len(prices):
+            return
+        if len(plan.prices) != len(prices):
+            logger.warning(
+                "Dynamic ladder adjustment skipped because plan length differs from request prices: code=%s, plan_prices=%s, prices=%s.",
+                request.code,
+                plan.prices,
+                prices,
+            )
+            return
+
+        order_book = self.engine.get_top_order_book(request.code)
+        if order_book is None:
+            logger.warning("Dynamic ladder adjustment skipped because latest order book is unavailable: code=%s.", request.code)
+            return
+
+        bid_price = order_book["bid_price"]
+        ask_price = order_book["ask_price"]
+        current_mid = self._decimal_mid_price(bid_price, ask_price)
+        delta = current_mid - self._decimal_mid_price(plan.ref_bid, plan.ref_ask)
+        for index in range(start_price_index, len(prices)):
+            prices[index] = self._adjust_dynamic_ladder_price(
+                plan=plan,
+                original_price=plan.prices[index],
+                delta=delta,
+                current_bid=bid_price,
+                current_ask=ask_price,
+            )
+
+        logger.info(
+            "Dynamic ladder adjusted: code=%s, start_price_index=%s, ref_mid=%.4f, current_mid=%.4f, delta=%.4f, prices=%s.",
+            request.code,
+            start_price_index,
+            plan.ref_mid,
+            float(current_mid),
+            float(delta),
+            prices,
+        )
+
+    @staticmethod
+    def _adjust_dynamic_ladder_price(
+        plan: PriceLadderPlan,
+        original_price: float,
+        delta: Decimal,
+        current_bid: float,
+        current_ask: float,
+    ) -> float:
+        shifted_price = Decimal(str(original_price)) + delta
+        if plan.side == "sell":
+            adjusted_price = round_down_to_tick(float(shifted_price), plan.price_tick)
+            adjusted_price = max(adjusted_price, current_bid)
+        else:
+            adjusted_price = round_up_to_tick(float(shifted_price), plan.price_tick)
+            adjusted_price = min(adjusted_price, current_ask)
+        return round(adjusted_price, 2)
+
+    @staticmethod
+    def _decimal_mid_price(bid_price: float, ask_price: float) -> Decimal:
+        return (Decimal(str(bid_price)) + Decimal(str(ask_price))) / Decimal("2")
+
     def execute_limit_order(
         self,
         request: LimitOrderRequest,
@@ -338,20 +422,18 @@ class OrderExecutionService:
         cancel_wait_seconds: int,
         fill_outside_rth: bool = None,
     ) -> ExecutionResult:
-        if isinstance(request.price, list):
-            if not request.price:
-                logger.warning("Limit order execution skipped: empty price list for code=%s.", request.code)
-                return ExecutionResult(
-                    code=request.code,
-                    target_qty=request.qty,
-                    filled_qty=0.0,
-                    order_id=None,
-                    execution_status="fail",
-                    message="Empty price list.",
-                )
-            price = request.price[0]
-        else:
-            price = request.price
+        prices = list(request.price_ladder_plan.prices)
+        if not prices:
+            logger.warning("Limit order execution skipped: empty price list for code=%s.", request.code)
+            return ExecutionResult(
+                code=request.code,
+                target_qty=request.qty,
+                filled_qty=0.0,
+                order_id=None,
+                execution_status="fail",
+                message="Empty price list.",
+            )
+        price = prices[0]
 
         order_id = self.engine.place_limit_order(
             acc_id=request.acc_id,

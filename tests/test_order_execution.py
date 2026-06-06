@@ -3,7 +3,7 @@ import unittest
 import pandas as pd
 from futu import OrderStatus, TrdSide
 
-from trading.trading_engine.execution_engine import LimitOrderRequest, OrderExecutionService
+from trading.trading_engine.execution_engine import LimitOrderRequest, OrderExecutionService, PriceLadderPlan, build_price_ladder
 
 
 def order_update(order_id: str, status: object, dealt_qty: float, code: str = "US.TEST", qty: float = 10.0) -> pd.DataFrame:
@@ -22,6 +22,23 @@ def order_update(order_id: str, status: object, dealt_qty: float, code: str = "U
     )
 
 
+def make_price_ladder_plan(
+    prices: tuple[float, ...] = (1.0,),
+    side: str = "sell",
+    ref_bid: float | None = None,
+    ref_ask: float | None = None,
+    price_tick: float = 0.01,
+) -> PriceLadderPlan:
+    ref_price = prices[0] if prices else 1.0
+    return PriceLadderPlan(
+        prices=prices,
+        side=side,
+        ref_bid=ref_price if ref_bid is None else ref_bid,
+        ref_ask=ref_price if ref_ask is None else ref_ask,
+        price_tick=price_tick,
+    )
+
+
 class FakeEngine:
     def __init__(self) -> None:
         self.service: OrderExecutionService | None = None
@@ -35,6 +52,8 @@ class FakeEngine:
         self.placed_orders: list[tuple[str, float, float]] = []
         self.modified_orders: list[tuple[str, float, float]] = []
         self.cancelled_orders: list[str] = []
+        self.top_order_books: list[dict | None] = []
+        self.top_order_book_calls: list[str] = []
 
     def place_limit_order(self, acc_id, code, side, qty, price, remark=None, fill_outside_rth=False):
         order_id = self.place_results.pop(0) if self.place_results else str(len(self.placed_orders) + 1)
@@ -69,14 +88,48 @@ class FakeEngine:
                 self.service.on_order_status(update)
         return self.cancel_result
 
+    def get_top_order_book(self, code):
+        self.top_order_book_calls.append(code)
+        if not self.top_order_books:
+            return None
+        return self.top_order_books.pop(0)
+
 
 class OrderExecutionServiceTest(unittest.TestCase):
     def make_service(self) -> tuple[FakeEngine, OrderExecutionService, LimitOrderRequest]:
         engine = FakeEngine()
         service = OrderExecutionService(engine)
         engine.service = service
-        request = LimitOrderRequest(acc_id=1, code="US.TEST", side=TrdSide.SELL, qty=10, price=[1.0], remark="test")
+        request = LimitOrderRequest(
+            acc_id=1,
+            code="US.TEST",
+            side=TrdSide.SELL,
+            qty=10,
+            price_ladder_plan=make_price_ladder_plan(),
+            remark="test",
+        )
         return engine, service, request
+
+    def attach_ladder_plan(
+        self,
+        request: LimitOrderRequest,
+        *,
+        side: str = "sell",
+        bid_price: float = 1.0,
+        ask_price: float = 1.2,
+        price_tick: float = 0.01,
+        steps: tuple[float, ...] = (0.0, 1.0),
+    ) -> None:
+        plan = build_price_ladder(
+            side=side,
+            code=request.code,
+            bid_price=bid_price,
+            ask_price=ask_price,
+            price_tick=price_tick,
+            steps=steps,
+        )
+        request.side = TrdSide.SELL if side == "sell" else TrdSide.BUY
+        request.price_ladder_plan = plan
 
     def test_cached_callback_before_wait_completes_immediately(self):
         engine, service, request = self.make_service()
@@ -127,7 +180,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
         engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
         engine.modify_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
 
-        request.price = [1.0, 0.9]
+        request.price_ladder_plan = make_price_ladder_plan((1.0, 0.9))
 
         result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
 
@@ -137,12 +190,132 @@ class OrderExecutionServiceTest(unittest.TestCase):
         self.assertEqual(engine.modified_orders, [("1", 10, 0.9)])
         self.assertEqual(engine.cancelled_orders, [])
 
+    def test_dynamic_sell_ladder_shifts_next_price_up_when_mid_increases(self):
+        engine, service, request = self.make_service()
+        self.attach_ladder_plan(request, side="sell", bid_price=1.0, ask_price=1.2)
+        engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
+        engine.top_order_books.append({"bid_price": 1.0, "ask_price": 1.2})
+        engine.top_order_books.append({"bid_price": 1.1, "ask_price": 1.3})
+        engine.modify_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
+
+        result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
+
+        self.assertEqual(result.execution_status, "success")
+        self.assertEqual(engine.placed_orders, [("1", 10, 1.1)])
+        self.assertEqual(engine.modified_orders, [("1", 10, 1.1)])
+        self.assertEqual(engine.top_order_book_calls, ["US.TEST", "US.TEST"])
+
+    def test_dynamic_sell_ladder_shifts_next_price_down_when_mid_decreases(self):
+        engine, service, request = self.make_service()
+        self.attach_ladder_plan(request, side="sell", bid_price=1.0, ask_price=1.2)
+        engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
+        engine.top_order_books.append({"bid_price": 1.0, "ask_price": 1.2})
+        engine.top_order_books.append({"bid_price": 0.9, "ask_price": 1.1})
+        engine.modify_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
+
+        result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
+
+        self.assertEqual(result.execution_status, "success")
+        self.assertEqual(engine.placed_orders, [("1", 10, 1.1)])
+        self.assertEqual(engine.modified_orders, [("1", 10, 0.9)])
+
+    def test_dynamic_sell_ladder_adjusts_first_price_before_submit(self):
+        engine, service, request = self.make_service()
+        self.attach_ladder_plan(request, side="sell", bid_price=1.0, ask_price=1.2)
+        engine.top_order_books.append({"bid_price": 1.2, "ask_price": 1.4})
+        engine.place_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
+
+        result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
+
+        self.assertEqual(result.execution_status, "success")
+        self.assertEqual(engine.placed_orders, [("1", 10, 1.3)])
+        self.assertEqual(engine.top_order_book_calls, ["US.TEST"])
+
+    def test_dynamic_sell_ladder_bounds_adjusted_price_to_current_bid(self):
+        engine, service, request = self.make_service()
+        self.attach_ladder_plan(request, side="sell", bid_price=1.0, ask_price=1.2)
+        engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
+        engine.top_order_books.append({"bid_price": 1.0, "ask_price": 1.2})
+        engine.top_order_books.append({"bid_price": 1.08, "ask_price": 1.1})
+        engine.modify_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
+
+        result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
+
+        self.assertEqual(result.execution_status, "success")
+        self.assertEqual(engine.modified_orders, [("1", 10, 1.08)])
+
+    def test_dynamic_buy_ladder_shifts_next_price_when_mid_changes(self):
+        engine, service, request = self.make_service()
+        self.attach_ladder_plan(request, side="buy", bid_price=1.0, ask_price=1.2)
+        engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
+        engine.top_order_books.append({"bid_price": 1.0, "ask_price": 1.2})
+        engine.top_order_books.append({"bid_price": 0.9, "ask_price": 1.1})
+        engine.modify_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
+
+        result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
+
+        self.assertEqual(result.execution_status, "success")
+        self.assertEqual(engine.placed_orders, [("1", 10, 1.1)])
+        self.assertEqual(engine.modified_orders, [("1", 10, 1.1)])
+
+    def test_dynamic_buy_ladder_adjusts_first_price_before_submit(self):
+        engine, service, request = self.make_service()
+        self.attach_ladder_plan(request, side="buy", bid_price=1.0, ask_price=1.2)
+        engine.top_order_books.append({"bid_price": 0.8, "ask_price": 1.0})
+        engine.place_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
+
+        result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
+
+        self.assertEqual(result.execution_status, "success")
+        self.assertEqual(engine.placed_orders, [("1", 10, 0.9)])
+        self.assertEqual(engine.top_order_book_calls, ["US.TEST"])
+
+    def test_dynamic_buy_ladder_bounds_adjusted_price_to_current_ask(self):
+        engine, service, request = self.make_service()
+        self.attach_ladder_plan(request, side="buy", bid_price=1.0, ask_price=1.2)
+        engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
+        engine.top_order_books.append({"bid_price": 1.0, "ask_price": 1.2})
+        engine.top_order_books.append({"bid_price": 1.2, "ask_price": 1.22})
+        engine.modify_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
+
+        result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
+
+        self.assertEqual(result.execution_status, "success")
+        self.assertEqual(engine.modified_orders, [("1", 10, 1.22)])
+
+    def test_dynamic_ladder_uses_static_next_price_when_order_book_unavailable(self):
+        engine, service, request = self.make_service()
+        self.attach_ladder_plan(request, side="sell", bid_price=1.0, ask_price=1.2)
+        engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
+        engine.top_order_books.append(None)
+        engine.top_order_books.append(None)
+        engine.modify_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
+
+        result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
+
+        self.assertEqual(result.execution_status, "success")
+        self.assertEqual(engine.modified_orders, [("1", 10, 1.0)])
+        self.assertEqual(engine.top_order_book_calls, ["US.TEST", "US.TEST"])
+
+    def test_single_price_ladder_adjusts_before_first_submit(self):
+        engine, service, request = self.make_service()
+        engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
+        engine.cancel_updates.append(order_update("1", OrderStatus.CANCELLED_ALL, 0))
+        engine.top_order_books.append({"bid_price": 1.5, "ask_price": 1.7})
+
+        result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
+
+        self.assertEqual(result.execution_status, "fail")
+        self.assertEqual(engine.placed_orders, [("1", 10, 1.6)])
+        self.assertEqual(engine.modified_orders, [])
+        self.assertEqual(engine.top_order_book_calls, ["US.TEST"])
+
     def test_partial_fill_before_modify_is_counted_once(self):
         engine, service, request = self.make_service()
         engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 2))
         engine.modify_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
 
-        request.price = [1.0, 0.9]
+        request.price_ladder_plan = make_price_ladder_plan((1.0, 0.9))
 
         result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
 
@@ -157,7 +330,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
         engine.cancel_updates.append(order_update("1", OrderStatus.CANCELLED_ALL, 0))
         engine.place_updates.extend([None, order_update("2", OrderStatus.FILLED_ALL, 10)])
 
-        request.price = [1.0, 0.9]
+        request.price_ladder_plan = make_price_ladder_plan((1.0, 0.9))
 
         result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
 
@@ -172,7 +345,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
         engine.place_updates.append(order_update("1", OrderStatus.FAILED, 0))
         engine.place_updates.append(order_update("2", OrderStatus.FILLED_ALL, 10))
 
-        request.price = [1.0, 0.9]
+        request.price_ladder_plan = make_price_ladder_plan((1.0, 0.9))
 
         result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
 
@@ -185,7 +358,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
         engine.place_updates.append(order_update("1", OrderStatus.CANCELLED_ALL, 0))
         engine.place_updates.append(order_update("2", OrderStatus.FILLED_ALL, 10))
 
-        request.price = [1.0, 0.9]
+        request.price_ladder_plan = make_price_ladder_plan((1.0, 0.9))
 
         result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
 
@@ -198,7 +371,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
         engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
         engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
 
-        request.price = [1.0, 0.9]
+        request.price_ladder_plan = make_price_ladder_plan((1.0, 0.9))
 
         result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
 
@@ -210,7 +383,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
         engine, service, request = self.make_service()
         engine.place_results.extend([None, None])
 
-        request.price = [1.0, 0.9]
+        request.price_ladder_plan = make_price_ladder_plan((1.0, 0.9))
 
         result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
 
@@ -221,7 +394,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
 
     def test_execute_limit_order_submits_once_and_waits_for_fill(self):
         engine, service, request = self.make_service()
-        request.price = 1.0
+        request.price_ladder_plan = make_price_ladder_plan((1.0,))
         engine.place_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
 
         result = service.execute_limit_order(request, order_wait_seconds=0, cancel_wait_seconds=0, fill_outside_rth=True)
@@ -233,7 +406,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
 
     def test_execute_limit_order_cancels_after_timeout(self):
         engine, service, request = self.make_service()
-        request.price = 1.0
+        request.price_ladder_plan = make_price_ladder_plan((1.0,))
         engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
         engine.cancel_updates.append(order_update("1", OrderStatus.CANCELLED_ALL, 0))
 
@@ -247,7 +420,7 @@ class OrderExecutionServiceTest(unittest.TestCase):
 
     def test_execute_limit_order_counts_fill_during_cancel(self):
         engine, service, request = self.make_service()
-        request.price = 1.0
+        request.price_ladder_plan = make_price_ladder_plan((1.0,))
         engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 2))
         engine.cancel_updates.append(order_update("1", OrderStatus.CANCELLED_PART, 5))
 

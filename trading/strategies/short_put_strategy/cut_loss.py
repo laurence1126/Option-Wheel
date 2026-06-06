@@ -95,7 +95,7 @@ def execute_cut_loss(strategy: ShortPutStrategy, watch: CutLossWatch, order_book
         return
 
     requested_qty = sum(request.qty for request in requests)
-    price_ladder = requests[0].price if isinstance(requests[0].price, list) else [requests[0].price]
+    price_ladder = list(requests[0].price_ladder_plan.prices)
     requires_approval = strategy.config.telegram_approval.get("cut_loss", True)
     approval_summary = build_cut_loss_summary(
         code=watch.code,
@@ -174,7 +174,7 @@ def _build_execution_requests(strategy: ShortPutStrategy, watch: CutLossWatch, b
         )
         return None
 
-    price_ladder = build_price_ladder(
+    price_ladder_plan = build_price_ladder(
         side="buy",
         code=watch.code,
         bid_price=bid_price,
@@ -182,7 +182,7 @@ def _build_execution_requests(strategy: ShortPutStrategy, watch: CutLossWatch, b
         price_tick=watch.price_tick,
         steps=strategy.config.price_ladder_steps,
     )
-    if not price_ladder:
+    if not price_ladder_plan.prices:
         logger.warning("Build execution requests failed: empty price ladder. code=%s.", watch.code)
         return None
 
@@ -203,8 +203,8 @@ def _build_execution_requests(strategy: ShortPutStrategy, watch: CutLossWatch, b
                 code=watch.code,
                 side=TrdSide.BUY,
                 qty=child_qty,
-                price=price_ladder,
                 remark="cut_loss",
+                price_ladder_plan=price_ladder_plan,
             )
         )
         remaining_qty -= child_qty
@@ -217,7 +217,7 @@ def _build_execution_requests(strategy: ShortPutStrategy, watch: CutLossWatch, b
         watch.stop_price,
         bid_price,
         ask_price,
-        price_ladder,
+        price_ladder_plan.prices,
     )
     return requests
 

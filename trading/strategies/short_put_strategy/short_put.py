@@ -47,8 +47,7 @@ def execute_short_put_strategy(strategy: ShortPutStrategy):
 
         requested_qty = sum(request.qty for request in requests)
         requires_approval = strategy.config.telegram_approval.get("short_put", True)
-        prices = requests[0].price if requests else []
-        price_ladder = prices if isinstance(prices, list) else [prices]
+        price_ladder = list(requests[0].price_ladder_plan.prices) if requests else []
         option_info = resolve_option_name(selected_option["name"], TrdEnv.REAL)
         option_name = resolve_option_info(option_info) if option_info is not None else selected_option["name"]
         to_maturity = None
@@ -257,7 +256,7 @@ def _build_execution_requests(strategy: ShortPutStrategy, selected_option: pd.Se
         )
         return None
 
-    price_ladder = build_price_ladder(
+    price_ladder_plan = build_price_ladder(
         side="sell",
         code=selected_option["code"],
         bid_price=bid_price,
@@ -275,7 +274,7 @@ def _build_execution_requests(strategy: ShortPutStrategy, selected_option: pd.Se
                 code=selected_option["code"],
                 side=TrdSide.SELL,
                 qty=child_qty,
-                price=price_ladder,
+                price_ladder_plan=price_ladder_plan,
             )
         )
         remaining_qty -= child_qty
@@ -289,6 +288,6 @@ def _build_execution_requests(strategy: ShortPutStrategy, selected_option: pd.Se
         bid_price,
         ask_price,
         spread_pct,
-        price_ladder,
+        price_ladder_plan.prices,
     )
     return requests
