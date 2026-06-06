@@ -4,15 +4,15 @@ from typing import TYPE_CHECKING, Any
 from dataclasses import dataclass
 from futu import SubType, TrdSide
 
-from .utils.account_state import update_put_position
-from .utils.option_parsing import OptionInfo, resolve_option_info
+from ..utils.account_state import update_put_position
+from ..utils.option_parsing import OptionInfo, resolve_option_info
 
 from trading.notification.telegram_summary import build_cut_loss_summary, build_execution_result_summary
 from trading.trading_engine.execution_engine import LimitOrderRequest, OPEN_ORDER_STATUSES, build_price_ladder, round_up_to_tick
 from app.utils.logging import configure_logger
 
 if TYPE_CHECKING:
-    from .strategy_main import ShortPutStrategy
+    from ..strategy_main import ShortPutStrategy
 
 logger = configure_logger(__name__)
 

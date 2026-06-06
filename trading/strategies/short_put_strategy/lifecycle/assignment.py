@@ -4,12 +4,12 @@ import pandas as pd
 from typing import TYPE_CHECKING
 from futu import SubType
 
-from .utils.account_state import update_put_position
+from ..utils.account_state import update_put_position
 
 from app.utils.logging import configure_logger
 
 if TYPE_CHECKING:
-    from .strategy_main import ShortPutStrategy
+    from ..strategy_main import ShortPutStrategy
 
 logger = configure_logger(__name__)
 
