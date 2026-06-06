@@ -195,7 +195,7 @@ class FutuTradingEngine:
 
                 logger.info("Startup recovery starting: strategy_id=%s, action=%s.", strategy_id, action_name)
                 try:
-                    action_succeeded = action()
+                    action_succeeded = action(strategy)
                 except Exception:
                     recovery_failed = True
                     logger.exception("Startup recovery failed: strategy_id=%s, action=%s.", strategy_id, action_name)
@@ -439,10 +439,10 @@ class FutuTradingEngine:
         if not code or not bids or not asks:
             return None
 
-        bid_price = self._valid_positive_float(bids[0][0])
-        ask_price = self._valid_positive_float(asks[0][0])
-        bid_volume = self._valid_positive_float(bids[0][1])
-        ask_volume = self._valid_positive_float(asks[0][1])
+        bid_price = self.valid_positive_float(bids[0][0])
+        ask_price = self.valid_positive_float(asks[0][0])
+        bid_volume = self.valid_positive_float(bids[0][1])
+        ask_volume = self.valid_positive_float(asks[0][1])
         if bid_price is None or ask_price is None or bid_volume is None or ask_volume is None or ask_price < bid_price:
             return None
         return {
@@ -547,7 +547,7 @@ class FutuTradingEngine:
             logger.error("Cancel skipped because open order query failed: order_id=%s, code=%s.", order_id, code)
             return False
         if orders.empty:
-            logger.info("No open orders to cancel: order_id=%s, code=%s.", order_id, code)
+            logger.info("No open orders to cancel: order_id=%s, code=%s.", "ALL" if not order_id else order_id, "ALL" if not code else code)
             return True
 
         success = True
@@ -670,7 +670,7 @@ class FutuTradingEngine:
         self.quote_context.set_handler(OnTickClass())
 
     @staticmethod
-    def _valid_positive_float(value: object) -> float | None:
+    def valid_positive_float(value: object) -> float | None:
         try:
             result = float(value)
         except (TypeError, ValueError):

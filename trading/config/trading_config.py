@@ -22,7 +22,6 @@ class ShortPutLiveConfig:
     cancel_wait_seconds: int = 5
     telegram_approval: dict[str, bool] = field(default_factory=lambda: {"short_put": False, "cut_loss": False})
     telegram_approval_timeout: int = 60
-    assignment_action_timeout: int = 1800
 
 
 SHORT_PUT_CONFIG = ShortPutLiveConfig(

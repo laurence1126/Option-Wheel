@@ -9,7 +9,7 @@ if not __package__:
 from futu import *
 from trading.config.trading_config import SHORT_PUT_CONFIG
 from trading.trading_engine.futu_trading_engine import FutuTradingEngine
-from trading.strategies.short_put_strategy import ShortPutStrategy
+from trading.strategies.short_put_strategy.strategy_main import ShortPutStrategy
 from app.utils.logging import configure_logger
 
 logger = configure_logger(__name__)

@@ -113,10 +113,10 @@ class TradingStrategyBase:
         """SysNotifyHandlerBase callback data."""
         pass
 
-    def get_strategy_actions(self) -> dict[str, Callable[[], Any]]:
+    def get_strategy_actions(self) -> dict[str, Callable[..., Any]]:
         """Return actions that external controls, such as Telegram callbacks, may invoke."""
         return {}
 
-    def get_restart_actions(self) -> dict[str, Callable[[], Any]]:
+    def get_restart_actions(self) -> dict[str, Callable[..., Any]]:
         """Return ordered actions that restore strategy runtime state after engine startup."""
         return {}

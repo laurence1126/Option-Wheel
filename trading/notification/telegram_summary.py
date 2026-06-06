@@ -78,34 +78,6 @@ def build_cut_loss_summary(
     )
 
 
-def build_assignment_summary(
-    code: str,
-    side: str,
-    price: float,
-    qty: int | float,
-    matched_strike: float,
-    market_state: Any,
-    detected_at: Any,
-    final_line: str = "🫡 Liquidate this position?",
-) -> str:
-    return (
-        "<b>🚨 POTENTIAL PUT ASSIGNMENT</b>\n"
-        "\n"
-        "<b>📜 Underlying Order</b>\n"
-        f"Code: {html.escape(str(code))}\n"
-        f"Side: {html.escape(str(side))}\n"
-        f"Price: {_format_price(price)}\n"
-        f"Quantity: {html.escape(_format_quantity(qty))}\n"
-        "\n"
-        "<b>🧾 Assignment Signal</b>\n"
-        f"Market State: {html.escape(str(market_state))}\n"
-        f"Matched Strike: {_format_price(matched_strike)}\n"
-        f"Detected At: {html.escape(str(detected_at))}\n"
-        "\n"
-        f"{html.escape(final_line)}"
-    )
-
-
 def replace_summary_prompt(summary: str, result_text: str) -> str:
     lines = str(summary).splitlines()
     for index in range(len(lines) - 1, -1, -1):

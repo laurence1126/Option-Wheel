@@ -16,10 +16,12 @@ def build_status_message(engine: Any) -> str:
             trading_status = getattr(strategy, "trading_status", None)
             if trading_status is not None and isinstance(trading_status, dict):
                 if trading_status.get("cut_loss_setup") is not None:
-                    strategy_text += "        <b>·</b> Cut loss monitor " + ("setup.\n" if trading_status.get("cut_loss_setup") else "not setup.\n")
+                    strategy_text += "        <b>·</b> Cut loss monitor " + (
+                        "setup successfully.\n" if trading_status.get("cut_loss_setup") else "setup failed.\n"
+                    )
                 if trading_status.get("maturing_updated") is not None:
                     strategy_text += "        <b>·</b> Maturing put strikes " + (
-                        "updated.\n" if trading_status.get("maturing_updated") else "not updated.\n"
+                        "update successfully.\n" if trading_status.get("maturing_updated") else "not updated.\n"
                     )
     else:
         strategy_text = "    - None"

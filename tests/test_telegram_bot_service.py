@@ -11,7 +11,6 @@ import pandas as pd
 from trading.notification.telegram_trading_handler import PendingShortPut, RESTART_ENV_VAR, TelegramTradingHandler as TelegramBotService
 from trading.notification.telegram_consts import BOT_COMMANDS, HELP_TEXT, OPTION_WATCHER_APP_URL
 from trading.notification.telegram_summary import (
-    build_assignment_summary,
     build_cut_loss_summary,
     build_execution_result_summary,
     build_sell_put_summary,
@@ -24,29 +23,15 @@ class FakeStrategy:
     def __init__(self) -> None:
         self.execute_short_put_calls = 0
         self.lock = threading.RLock()
-        self._pending_assignment_actions = {
-            "token-1": {
-                "order_id": "assignment-1",
-                "code": "US.SPY",
-                "qty": 100,
-                "price": 723.0,
-                "matched_strike": 723.0,
-            }
-        }
-        self.assignment_calls = []
 
-    def execute_short_put_strategy(self) -> None:
+    def execute_short_put_strategy(self, strategy=None) -> None:
         self.execute_short_put_calls += 1
 
     def get_strategy_actions(self):
         return {
             "execute_short_put": self.execute_short_put_strategy,
             "execute_short_put_strategy": self.execute_short_put_strategy,
-            "execute_underlying_assignment": self.execute_underlying_assignment,
         }
-
-    def execute_underlying_assignment(self, method: str, assignment_token: str) -> None:
-        self.assignment_calls.append({"method": method, "assignment_token": assignment_token})
 
 
 class FakeEngine:
@@ -943,251 +928,6 @@ class TelegramBotServiceTest(unittest.TestCase):
         answer.assert_called_once_with(service.config, "callback-1", "Retry unavailable")
         edit_message.assert_not_called()
         retry_thread.assert_not_called()
-
-    def test_assignment_liquidate_callback_replaces_keyboard_with_method_choices(self):
-        service = self.make_service()
-        service.config = self.make_config()
-        service.enabled = True
-        service.engine = FakeEngine()
-        service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"] = "liquidating"
-        summary = build_assignment_summary(
-            code="US.SPY",
-            side="BUY",
-            price=723.0,
-            qty=100,
-            matched_strike=723.0,
-            market_state="AFTER_HOURS_BEGIN",
-            detected_at="2026-05-17 16:00:00",
-        )
-
-        with (
-            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
-        ):
-            service.handle_callback_query(
-                {
-                    "id": "callback-1",
-                    "data": "assignment:short_put:liquidate:token-1",
-                    "message": {"message_id": 10, "chat": {"id": "123"}, "text": summary},
-                }
-            )
-
-        answer.assert_called_once_with(service.config, "callback-1", "Choose liquidation method")
-        self.assertEqual(edit_message.call_args.kwargs["text"], replace_summary_prompt(summary, "🚬 Choose liquidation method."))
-        self.assertEqual(edit_message.call_args.kwargs["parse_mode"], "HTML")
-        self.assertEqual(
-            edit_message.call_args.kwargs["reply_markup"],
-            {
-                "inline_keyboard": [
-                    [
-                        {"text": "📈 Market Order", "callback_data": "assignment:short_put:market_order:token-1"},
-                        {"text": "🪜 Price Ladder", "callback_data": "assignment:short_put:price_ladder:token-1"},
-                    ]
-                ]
-            },
-        )
-        self.assertEqual(service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"], "liquidating")
-
-    def test_assignment_market_order_callback_updates_message_prompt_and_removes_keyboard(self):
-        service = self.make_service()
-        service.config = self.make_config()
-        service.enabled = True
-        service.engine = FakeEngine()
-        service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"] = "liquidating"
-        summary = build_assignment_summary(
-            code="US.SPY",
-            side="BUY",
-            price=723.0,
-            qty=100,
-            matched_strike=723.0,
-            market_state="AFTER_HOURS_BEGIN",
-            detected_at="2026-05-17 16:00:00",
-            final_line="🚬 Choose liquidation method.",
-        )
-
-        with (
-            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
-        ):
-            service.handle_callback_query(
-                {
-                    "id": "callback-1",
-                    "data": "assignment:short_put:market_order:token-1",
-                    "message": {"message_id": 10, "chat": {"id": "123"}, "text": summary},
-                }
-            )
-
-        answer.assert_called_once_with(service.config, "callback-1", "Market order selected")
-        self.assertEqual(edit_message.call_args.kwargs["text"], replace_summary_prompt(summary, "📈 Liquidating with market order..."))
-        self.assertEqual(edit_message.call_args.kwargs["parse_mode"], "HTML")
-        self.assertEqual(edit_message.call_args.kwargs["reply_markup"], {"inline_keyboard": []})
-        self.assertEqual(service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"], "market_order_selected")
-        self.assertEqual(service.engine.strategy["short_put"].assignment_calls, [{"method": "market_order", "assignment_token": "token-1"}])
-
-    def test_assignment_market_order_callback_does_not_reset_running_action(self):
-        service = self.make_service()
-        service.config = self.make_config()
-        service.enabled = True
-        service.engine = FakeEngine()
-        service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"] = "market_order_executing"
-
-        with (
-            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_trading_handler.threading.Thread") as assignment_thread,
-        ):
-            service.handle_callback_query(
-                {
-                    "id": "callback-1",
-                    "data": "assignment:short_put:market_order:token-1",
-                    "message": {"message_id": 10, "chat": {"id": "123"}, "text": "assignment"},
-                }
-            )
-
-        answer.assert_called_once_with(service.config, "callback-1", "Assignment action already selected")
-        edit_message.assert_not_called()
-        assignment_thread.assert_not_called()
-        self.assertEqual(service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"], "market_order_executing")
-
-    def test_assignment_market_order_callback_retries_failed_action(self):
-        service = self.make_service()
-        service.config = self.make_config()
-        service.enabled = True
-        service.engine = FakeEngine()
-        service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"] = "market_order_failed"
-
-        class ImmediateThread:
-            def __init__(self, target, args=(), name=None, daemon=None):
-                self.target = target
-                self.args = args
-                self.name = name
-                self.daemon = daemon
-
-            def start(self):
-                self.target(*self.args)
-
-        with (
-            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_trading_handler.threading.Thread", ImmediateThread),
-        ):
-            service.handle_callback_query(
-                {
-                    "id": "callback-1",
-                    "data": "assignment:short_put:market_order:token-1",
-                    "message": {"message_id": 10, "chat": {"id": "123"}, "text": "ASSIGNMENT LIQUIDATION RESULT - FAILURE"},
-                }
-            )
-
-        answer.assert_called_once_with(service.config, "callback-1", "Market order selected")
-        self.assertEqual(edit_message.call_args.kwargs["reply_markup"], {"inline_keyboard": []})
-        self.assertEqual(service.engine.strategy["short_put"].assignment_calls, [{"method": "market_order", "assignment_token": "token-1"}])
-
-    def test_assignment_expired_callback_removes_token_without_execution(self):
-        service = self.make_service()
-        service.config = self.make_config()
-        service.enabled = True
-        service.engine = FakeEngine()
-        service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["expires_at"] = pd.Timestamp.now() - pd.Timedelta(seconds=1)
-
-        with (
-            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_trading_handler.threading.Thread") as assignment_thread,
-        ):
-            service.handle_callback_query(
-                {
-                    "id": "callback-1",
-                    "data": "assignment:short_put:market_order:token-1",
-                    "message": {"message_id": 10, "chat": {"id": "123"}, "text": "assignment"},
-                }
-            )
-
-        answer.assert_called_once_with(service.config, "callback-1", "Assignment action expired")
-        edit_message.assert_not_called()
-        assignment_thread.assert_not_called()
-        self.assertNotIn("token-1", service.engine.strategy["short_put"]._pending_assignment_actions)
-        self.assertEqual(service.engine.strategy["short_put"].assignment_calls, [])
-
-    def test_assignment_price_ladder_callback_updates_message_prompt_and_removes_keyboard(self):
-        service = self.make_service()
-        service.config = self.make_config()
-        service.enabled = True
-        service.engine = FakeEngine()
-        service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"] = "liquidating"
-        summary = build_assignment_summary(
-            code="US.SPY",
-            side="BUY",
-            price=723.0,
-            qty=100,
-            matched_strike=723.0,
-            market_state="AFTER_HOURS_BEGIN",
-            detected_at="2026-05-17 16:00:00",
-            final_line="🚬 Choose liquidation method.",
-        )
-
-        class ImmediateThread:
-            def __init__(self, target, args=(), name=None, daemon=None):
-                self.target = target
-                self.args = args
-                self.name = name
-                self.daemon = daemon
-
-            def start(self):
-                self.target(*self.args)
-
-        with (
-            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
-            patch("trading.notification.telegram_trading_handler.threading.Thread", ImmediateThread),
-        ):
-            service.handle_callback_query(
-                {
-                    "id": "callback-1",
-                    "data": "assignment:short_put:price_ladder:token-1",
-                    "message": {"message_id": 10, "chat": {"id": "123"}, "text": summary},
-                }
-            )
-
-        answer.assert_called_once_with(service.config, "callback-1", "Price ladder selected")
-        self.assertEqual(edit_message.call_args.kwargs["text"], replace_summary_prompt(summary, "🪜 Liquidating with price ladder..."))
-        self.assertEqual(edit_message.call_args.kwargs["parse_mode"], "HTML")
-        self.assertEqual(edit_message.call_args.kwargs["reply_markup"], {"inline_keyboard": []})
-        self.assertEqual(service.engine.strategy["short_put"]._pending_assignment_actions["token-1"]["action_status"], "price_ladder_selected")
-        self.assertEqual(service.engine.strategy["short_put"].assignment_calls, [{"method": "price_ladder", "assignment_token": "token-1"}])
-
-    def test_assignment_cancel_callback_updates_message_prompt_and_removes_pending_action(self):
-        service = self.make_service()
-        service.config = self.make_config()
-        service.enabled = True
-        service.engine = FakeEngine()
-        summary = build_assignment_summary(
-            code="US.SPY",
-            side="BUY",
-            price=723.0,
-            qty=100,
-            matched_strike=723.0,
-            market_state="AFTER_HOURS_BEGIN",
-            detected_at="2026-05-17 16:00:00",
-        )
-
-        with (
-            patch("trading.notification.telegram_trading_handler.answer_callback_query", return_value=True) as answer,
-            patch("trading.notification.telegram_trading_handler.edit_telegram_message_text", return_value=True) as edit_message,
-        ):
-            service.handle_callback_query(
-                {
-                    "id": "callback-1",
-                    "data": "assignment:short_put:cancel:token-1",
-                    "message": {"message_id": 10, "chat": {"id": "123"}, "text": summary},
-                }
-            )
-
-        answer.assert_called_once_with(service.config, "callback-1", "Liquidation canceled")
-        self.assertEqual(edit_message.call_args.kwargs["text"], replace_summary_prompt(summary, "❌ Liquidation canceled."))
-        self.assertEqual(edit_message.call_args.kwargs["parse_mode"], "HTML")
-        self.assertEqual(edit_message.call_args.kwargs["reply_markup"], {"inline_keyboard": []})
-        self.assertNotIn("token-1", service.engine.strategy["short_put"]._pending_assignment_actions)
 
     def test_approve_callback_resolves_pending_approval_true(self):
         service = self.make_service()

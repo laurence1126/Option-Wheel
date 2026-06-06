@@ -13,7 +13,7 @@ import pandas as pd
 from app.telegram_bot import TelegramBotService
 from app.utils.telegram import answer_telegram_callback_query as answer_callback_query
 from app.utils.telegram import edit_telegram_message_text
-from trading.notification.telegram_callbacks import parse_assignment_callback, parse_strategy_callback
+from trading.notification.telegram_callbacks import parse_strategy_callback
 from trading.notification.telegram_consts import (
     BOT_COMMANDS,
     HELP_TEXT,
@@ -222,8 +222,6 @@ class TelegramTradingHandler:
             self._cancel_shortput(data.removeprefix("shortput:cancel:"), callback_query_id, chat_id, message_id)
         elif data.startswith("strategy:"):
             self._handle_strategy_callback(data, callback_query_id, chat_id, message_id, str(message.get("text", "")))
-        elif data.startswith("assignment:"):
-            self._handle_assignment_callback(data, callback_query_id, chat_id, message_id, str(message.get("text", "")))
 
     def _handle_strategy_callback(self, data: str, callback_query_id: str, chat_id: str, message_id: int, message_text: str) -> None:
         callback = parse_strategy_callback(data)
@@ -237,145 +235,6 @@ class TelegramTradingHandler:
             self._cancel_strategy_retry(callback_query_id, chat_id, message_id, message_text)
         else:
             answer_callback_query(self.config, callback_query_id, "Strategy action unavailable")
-
-    def _handle_assignment_callback(self, data: str, callback_query_id: str, chat_id: str, message_id: int, message_text: str) -> None:
-        callback = parse_assignment_callback(data)
-        if callback is None:
-            answer_callback_query(self.config, callback_query_id, "Assignment action unavailable")
-            return
-
-        strategies = getattr(self.engine, "strategy", {}) if self.engine is not None else {}
-        strategy = strategies.get(callback.strategy_id) if isinstance(strategies, dict) else None
-        if strategy is None:
-            answer_callback_query(self.config, callback_query_id, "Assignment action unavailable")
-            return
-
-        pending_actions = getattr(strategy, "_pending_assignment_actions", {})
-        pending_action = pending_actions.get(callback.assignment_token) if isinstance(pending_actions, dict) else None
-        if pending_action is None:
-            answer_callback_query(self.config, callback_query_id, "Assignment action expired")
-            return
-        lock = getattr(strategy, "lock", None)
-        if lock is None:
-            expires_at = pending_action.get("expires_at")
-            if expires_at is not None and pd.Timestamp.now() >= pd.Timestamp(expires_at):
-                pending_actions.pop(callback.assignment_token, None)
-                answer_callback_query(self.config, callback_query_id, "Assignment action expired")
-                return
-        else:
-            with lock:
-                pending_action = pending_actions.get(callback.assignment_token)
-                if pending_action is None:
-                    answer_callback_query(self.config, callback_query_id, "Assignment action expired")
-                    return
-                expires_at = pending_action.get("expires_at")
-                if expires_at is not None and pd.Timestamp.now() >= pd.Timestamp(expires_at):
-                    pending_actions.pop(callback.assignment_token, None)
-                    answer_callback_query(self.config, callback_query_id, "Assignment action expired")
-                    return
-
-        if callback.action_type == "liquidate":
-            if lock is None:
-                if pending_action.get("action_status") not in {None, "liquidating"}:
-                    answer_callback_query(self.config, callback_query_id, "Assignment action already selected")
-                    return
-                pending_action["action_status"] = "liquidating"
-            else:
-                with lock:
-                    pending_action = pending_actions.get(callback.assignment_token)
-                    if pending_action is None:
-                        answer_callback_query(self.config, callback_query_id, "Assignment action expired")
-                        return
-                    if pending_action.get("action_status") not in {None, "liquidating"}:
-                        answer_callback_query(self.config, callback_query_id, "Assignment action already selected")
-                        return
-                    pending_action["action_status"] = "liquidating"
-            reply_markup = {
-                "inline_keyboard": [
-                    [
-                        {"text": "📈 Market Order", "callback_data": f"assignment:{callback.strategy_id}:market_order:{callback.assignment_token}"},
-                        {"text": "🪜 Price Ladder", "callback_data": f"assignment:{callback.strategy_id}:price_ladder:{callback.assignment_token}"},
-                    ]
-                ]
-            }
-            answer_callback_query(self.config, callback_query_id, "Choose liquidation method")
-            edit_telegram_message_text(
-                self.config,
-                chat_id=chat_id,
-                message_id=message_id,
-                text=replace_summary_prompt(message_text, "🚬 Choose liquidation method."),
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-            )
-        elif callback.action_type == "market_order":
-            if lock is None:
-                if pending_action.get("action_status") not in {"liquidating", "market_order_failed"}:
-                    answer_callback_query(self.config, callback_query_id, "Assignment action already selected")
-                    return
-                pending_action["action_status"] = "market_order_selected"
-            else:
-                with lock:
-                    pending_action = pending_actions.get(callback.assignment_token)
-                    if pending_action is None:
-                        answer_callback_query(self.config, callback_query_id, "Assignment action expired")
-                        return
-                    if pending_action.get("action_status") not in {"liquidating", "market_order_failed"}:
-                        answer_callback_query(self.config, callback_query_id, "Assignment action already selected")
-                        return
-                    pending_action["action_status"] = "market_order_selected"
-            answer_callback_query(self.config, callback_query_id, "Market order selected")
-            edit_telegram_message_text(
-                self.config,
-                chat_id=chat_id,
-                message_id=message_id,
-                text=replace_summary_prompt(message_text, "📈 Liquidating with market order..."),
-                parse_mode="HTML",
-                reply_markup=EMPTY_INLINE_KEYBOARD,
-            )
-            self._execute_assignment_action(callback.strategy_id, strategy, "market_order", callback.assignment_token)
-        elif callback.action_type == "price_ladder":
-            if lock is None:
-                if pending_action.get("action_status") not in {"liquidating", "price_ladder_failed"}:
-                    answer_callback_query(self.config, callback_query_id, "Assignment action already selected")
-                    return
-                pending_action["action_status"] = "price_ladder_selected"
-            else:
-                with lock:
-                    pending_action = pending_actions.get(callback.assignment_token)
-                    if pending_action is None:
-                        answer_callback_query(self.config, callback_query_id, "Assignment action expired")
-                        return
-                    if pending_action.get("action_status") not in {"liquidating", "price_ladder_failed"}:
-                        answer_callback_query(self.config, callback_query_id, "Assignment action already selected")
-                        return
-                    pending_action["action_status"] = "price_ladder_selected"
-            answer_callback_query(self.config, callback_query_id, "Price ladder selected")
-            edit_telegram_message_text(
-                self.config,
-                chat_id=chat_id,
-                message_id=message_id,
-                text=replace_summary_prompt(message_text, "🪜 Liquidating with price ladder..."),
-                parse_mode="HTML",
-                reply_markup=EMPTY_INLINE_KEYBOARD,
-            )
-            self._execute_assignment_action(callback.strategy_id, strategy, "price_ladder", callback.assignment_token)
-        elif callback.action_type == "cancel":
-            if lock is None:
-                pending_actions.pop(callback.assignment_token, None)
-            else:
-                with lock:
-                    pending_actions.pop(callback.assignment_token, None)
-            answer_callback_query(self.config, callback_query_id, "Liquidation canceled")
-            edit_telegram_message_text(
-                self.config,
-                chat_id=chat_id,
-                message_id=message_id,
-                text=replace_summary_prompt(message_text, "❌ Liquidation canceled."),
-                parse_mode="HTML",
-                reply_markup=EMPTY_INLINE_KEYBOARD,
-            )
-        else:
-            answer_callback_query(self.config, callback_query_id, "Assignment action unavailable")
 
     ####################################################################################################
     # Trade Approval Callback Handling
@@ -477,7 +336,7 @@ class TelegramTradingHandler:
 
         token = secrets.token_urlsafe(8)
         expires_at = pd.Timestamp.now() + pd.Timedelta(seconds=SHORT_PUT_CONFIRMATION_TIMEOUT_SECONDS)
-        strategy_ids = [strategy_id for strategy_id, _ in matches]
+        strategy_ids = [strategy_id for strategy_id, _, _ in matches]
         with self._lock:
             self._pending_shortput_confirmations[token] = PendingShortPut(
                 expires_at=expires_at,
@@ -599,6 +458,7 @@ class TelegramTradingHandler:
                 reply_markup=EMPTY_INLINE_KEYBOARD,
             )
             return
+        strategy, action = shortput_action
 
         answer_callback_query(self.config, callback_query_id, "Short put confirmed")
         edit_telegram_message_text(
@@ -610,7 +470,7 @@ class TelegramTradingHandler:
         )
         shortput_thread = threading.Thread(
             target=self._run_shortput_action,
-            args=(strategy_id, shortput_action),
+            args=(strategy_id, strategy, action),
             name=f"{strategy_id}-shortput-command",
             daemon=True,
         )
@@ -664,7 +524,7 @@ class TelegramTradingHandler:
             return None
         return pending
 
-    def _find_shortput_actions(self) -> tuple[list[tuple[str, Callable[[], None]]], str | None]:
+    def _find_shortput_actions(self) -> tuple[list[tuple[str, object, Callable[..., None]]], str | None]:
         if self.engine is None:
             return [], "Trading engine unavailable."
 
@@ -672,7 +532,7 @@ class TelegramTradingHandler:
         if not isinstance(strategies, dict) or not strategies:
             return [], "Short put strategy unavailable."
 
-        matches: list[tuple[str, Callable[[], None]]] = []
+        matches: list[tuple[str, object, Callable[..., None]]] = []
         for strategy_id, strategy in strategies.items():
             get_actions = getattr(strategy, "get_strategy_actions", None)
             if not callable(get_actions):
@@ -682,13 +542,13 @@ class TelegramTradingHandler:
                 continue
             action = actions.get(SHORT_PUT_ACTION_ID)
             if callable(action):
-                matches.append((strategy_id, action))
+                matches.append((strategy_id, strategy, action))
 
         if not matches:
             return [], "Short put strategy unavailable."
         return matches, None
 
-    def _resolve_shortput_action(self, strategy_id: str) -> Callable[[], None] | None:
+    def _resolve_shortput_action(self, strategy_id: str) -> tuple[object, Callable[..., None]] | None:
         if self.engine is None:
             return None
 
@@ -706,11 +566,11 @@ class TelegramTradingHandler:
         if not isinstance(actions, dict):
             return None
         action = actions.get(SHORT_PUT_ACTION_ID)
-        return action if callable(action) else None
+        return (strategy, action) if callable(action) else None
 
-    def _run_shortput_action(self, strategy_id: str, shortput_action: Callable[[], None]) -> None:
+    def _run_shortput_action(self, strategy_id: str, strategy: object, shortput_action: Callable[..., None]) -> None:
         try:
-            shortput_action()
+            shortput_action(strategy)
         except Exception as exc:
             logger.exception("Short put command failed: strategy_id=%s.", strategy_id)
             self.send_message(f"Short put execution failed: {exc}")
@@ -756,7 +616,7 @@ class TelegramTradingHandler:
             reply_markup=EMPTY_INLINE_KEYBOARD,
         )
         retry_thread = threading.Thread(
-            target=self._run_strategy_retry, args=(strategy_id, action_id, retry_action), name=f"{strategy_id}-{action_id}-retry", daemon=True
+            target=self._run_strategy_retry, args=(strategy_id, strategy, action_id, retry_action), name=f"{strategy_id}-{action_id}-retry", daemon=True
         )
         retry_thread.start()
 
@@ -770,32 +630,11 @@ class TelegramTradingHandler:
             reply_markup=EMPTY_INLINE_KEYBOARD,
         )
 
-    def _run_strategy_retry(self, strategy_id: str, action_id: str, retry_action) -> None:
+    def _run_strategy_retry(self, strategy_id: str, strategy: object, action_id: str, retry_action) -> None:
         try:
-            retry_action()
+            retry_action(strategy)
         except Exception:
             logger.exception("Strategy retry failed: strategy_id=%s, action_id=%s.", strategy_id, action_id)
-
-    def _execute_assignment_action(self, strategy_id: str, strategy: object, method: str, assignment_token: str) -> None:
-        assignment_actions = strategy.get_strategy_actions()
-        assignment_action = assignment_actions.get("execute_underlying_assignment")
-        if not callable(assignment_action):
-            logger.error("Assignment action unavailable because execute_underlying_assignment is not registered: strategy_id=%s.", strategy_id)
-            return
-
-        assignment_thread = threading.Thread(
-            target=self._run_assignment_action,
-            args=(strategy_id, method, assignment_token, assignment_action),
-            name=f"{strategy_id}-assignment-{method}",
-            daemon=True,
-        )
-        assignment_thread.start()
-
-    def _run_assignment_action(self, strategy_id: str, method: str, assignment_token: str, assignment_action) -> None:
-        try:
-            assignment_action(method, assignment_token)
-        except Exception:
-            logger.exception("Assignment action failed: strategy_id=%s, method=%s, assignment_token=%s.", strategy_id, method, assignment_token)
 
     ####################################################################################################
     # Process Control Helpers

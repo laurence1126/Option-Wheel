@@ -106,11 +106,11 @@ class FakeStrategy(TradingStrategyBase):
             "setup_cut_loss_monitor": self.setup_cut_loss_monitor,
         }
 
-    def update_maturing_put_strikes(self) -> bool:
+    def update_maturing_put_strikes(self, strategy=None) -> bool:
         self.recovery_calls.append("update_maturing_put_strikes")
         return self.maturing_result
 
-    def setup_cut_loss_monitor(self) -> bool:
+    def setup_cut_loss_monitor(self, strategy=None) -> bool:
         self.recovery_calls.append("setup_cut_loss_monitor")
         if self.raise_on_cut_loss:
             raise RuntimeError("cut loss failed")
@@ -283,7 +283,7 @@ class FutuTradingEngineOrderWrapperTest(unittest.TestCase):
         telegram = FakeTelegram()
         engine, strategy = self.make_runnable_engine(telegram)
         calls = []
-        strategy.get_restart_actions = lambda: {"restore_custom_state": lambda: calls.append("restore_custom_state")}
+        strategy.get_restart_actions = lambda: {"restore_custom_state": lambda strategy: calls.append("restore_custom_state")}
 
         engine.run()
 
