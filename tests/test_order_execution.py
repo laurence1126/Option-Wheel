@@ -52,7 +52,7 @@ class FakeEngine:
         self.placed_orders: list[tuple[str, float, float]] = []
         self.modified_orders: list[tuple[str, float, float]] = []
         self.cancelled_orders: list[str] = []
-        self.top_order_books: list[dict | None] = []
+        self.top_order_books: list[object] = []
         self.top_order_book_calls: list[str] = []
 
     def place_limit_order(self, acc_id, code, side, qty, price, remark=None, fill_outside_rth=False):
@@ -92,7 +92,10 @@ class FakeEngine:
         self.top_order_book_calls.append(code)
         if not self.top_order_books:
             return None
-        return self.top_order_books.pop(0)
+        order_book = self.top_order_books.pop(0)
+        if isinstance(order_book, Exception):
+            raise order_book
+        return order_book
 
 
 class OrderExecutionServiceTest(unittest.TestCase):
@@ -152,6 +155,16 @@ class OrderExecutionServiceTest(unittest.TestCase):
         self.assertEqual(result.order_status, OrderStatus.FILLED_ALL)
         self.assertEqual(result.dealt_qty, 10)
 
+    def test_order_query_fallback_does_not_overwrite_newer_cached_partial_fill(self):
+        engine, service, request = self.make_service()
+        service.on_order_status(order_update("1", OrderStatus.SUBMITTED, 4))
+        engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 1))
+
+        result = service.wait_order_done_or_timeout(request, "1", submitted_qty=10, timeout_seconds=0)
+
+        self.assertTrue(result.timed_out)
+        self.assertEqual(result.dealt_qty, 4)
+
     def test_timeout_cancels_and_confirms_cancel_from_cached_push(self):
         engine, service, request = self.make_service()
         engine.order_list_results.append(order_update("1", OrderStatus.SUBMITTED, 0))
@@ -189,6 +202,18 @@ class OrderExecutionServiceTest(unittest.TestCase):
         self.assertEqual(engine.placed_orders, [("1", 10, 1.0)])
         self.assertEqual(engine.modified_orders, [("1", 10, 0.9)])
         self.assertEqual(engine.cancelled_orders, [])
+
+    def test_build_price_ladder_uses_decimal_mid_for_sell_floor_rounding(self):
+        plan = build_price_ladder(
+            side="sell",
+            code="US.TEST",
+            bid_price=1.2,
+            ask_price=1.4,
+            price_tick=0.01,
+            steps=(0.0,),
+        )
+
+        self.assertEqual(plan.prices, (1.3,))
 
     def test_dynamic_sell_ladder_shifts_next_price_up_when_mid_increases(self):
         engine, service, request = self.make_service()
@@ -296,6 +321,30 @@ class OrderExecutionServiceTest(unittest.TestCase):
         self.assertEqual(result.execution_status, "success")
         self.assertEqual(engine.modified_orders, [("1", 10, 1.0)])
         self.assertEqual(engine.top_order_book_calls, ["US.TEST", "US.TEST"])
+
+    def test_dynamic_ladder_uses_static_price_when_order_book_is_invalid(self):
+        engine, service, request = self.make_service()
+        self.attach_ladder_plan(request, side="sell", bid_price=1.0, ask_price=1.2)
+        engine.top_order_books.append({"bid_price": 1.2})
+        engine.place_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
+
+        result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
+
+        self.assertEqual(result.execution_status, "success")
+        self.assertEqual(engine.placed_orders, [("1", 10, 1.1)])
+        self.assertEqual(engine.top_order_book_calls, ["US.TEST"])
+
+    def test_dynamic_ladder_uses_static_price_when_order_book_fetch_raises(self):
+        engine, service, request = self.make_service()
+        self.attach_ladder_plan(request, side="sell", bid_price=1.0, ask_price=1.2)
+        engine.top_order_books.append(RuntimeError("order book failed"))
+        engine.place_updates.append(order_update("1", OrderStatus.FILLED_ALL, 10))
+
+        result = service.execute_limit_ladder(request, order_wait_seconds=0, cancel_wait_seconds=0)
+
+        self.assertEqual(result.execution_status, "success")
+        self.assertEqual(engine.placed_orders, [("1", 10, 1.1)])
+        self.assertEqual(engine.top_order_book_calls, ["US.TEST"])
 
     def test_single_price_ladder_adjusts_before_first_submit(self):
         engine, service, request = self.make_service()

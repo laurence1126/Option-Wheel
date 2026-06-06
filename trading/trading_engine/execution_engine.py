@@ -73,17 +73,20 @@ def build_price_ladder(
     price_tick: float,
     steps: tuple[float, ...],
 ) -> PriceLadderPlan:
-    mid_price = (bid_price + ask_price) / 2
-    spread = ask_price - bid_price
+    bid_price_decimal = Decimal(str(bid_price))
+    ask_price_decimal = Decimal(str(ask_price))
+    mid_price = (bid_price_decimal + ask_price_decimal) / Decimal("2")
+    spread = ask_price_decimal - bid_price_decimal
     prices = []
     for step in steps:
+        step_decimal = Decimal(str(step))
         if side == "sell":
-            price = mid_price - spread * step
-            price = round_down_to_tick(price, price_tick)
+            price = mid_price - spread * step_decimal
+            price = round_down_to_tick(float(price), price_tick)
             price = round(max(price, bid_price), 2)
         else:
-            price = mid_price + spread * step
-            price = round_up_to_tick(price, price_tick)
+            price = mid_price + spread * step_decimal
+            price = round_up_to_tick(float(price), price_tick)
             price = round(min(price, ask_price), 2)
         if price not in prices:
             prices.append(price)
@@ -573,11 +576,10 @@ class OrderExecutionService:
         if order_update is None or not self._is_order_wait_done(order_update, submitted_qty):
             fallback_orders = self.engine.order_list_query(acc_id=request.acc_id, order_id=order_id, code=request.code)
             if fallback_orders is not None and not fallback_orders.empty:
-                order_update = fallback_orders.iloc[0]
+                order_update = self._newer_order_update(order_update, fallback_orders.iloc[0], submitted_qty)
             with self._lock:
                 latest_update = self._order_updates.get(order_id)
-            if latest_update is not None and self._is_order_wait_done(latest_update, submitted_qty):
-                order_update = latest_update
+            order_update = self._newer_order_update(order_update, latest_update, submitted_qty)
 
         with self._lock:
             self._order_events.pop(order_id, None)
@@ -744,6 +746,32 @@ class OrderExecutionService:
         order_status = order_update["order_status"] if "order_status" in order_update.index else None
         dealt_qty = float(order_update["dealt_qty"]) if "dealt_qty" in order_update.index else 0.0
         return order_status in TERMINAL_ORDER_STATUSES or dealt_qty >= submitted_qty
+
+    @staticmethod
+    def _order_dealt_qty(order_update: pd.Series | None) -> float:
+        if order_update is None or "dealt_qty" not in order_update.index:
+            return 0.0
+        return float(order_update["dealt_qty"])
+
+    @classmethod
+    def _newer_order_update(cls, current: pd.Series | None, candidate: pd.Series | None, submitted_qty: int) -> pd.Series | None:
+        if candidate is None:
+            return current
+        if current is None:
+            return candidate
+
+        current_dealt_qty = cls._order_dealt_qty(current)
+        candidate_dealt_qty = cls._order_dealt_qty(candidate)
+        if candidate_dealt_qty > current_dealt_qty:
+            return candidate
+        if candidate_dealt_qty < current_dealt_qty:
+            return current
+
+        current_done = cls._is_order_wait_done(current, submitted_qty)
+        candidate_done = cls._is_order_wait_done(candidate, submitted_qty)
+        if candidate_done and not current_done:
+            return candidate
+        return current
 
     @staticmethod
     def _filled_result(
