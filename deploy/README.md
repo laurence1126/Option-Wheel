@@ -1,11 +1,13 @@
 # Ubuntu `systemd` Deployment
 
-This deployment runs the local Python trading engine as a `systemd` service. It does not install, restart, or modify the remote OpenD server.
+This deployment runs the local Python trading engine and local Futu OpenD API as `systemd` services.
 
 ## Behavior
 
 - Starts the trading engine automatically when Ubuntu boots.
+- Starts Futu OpenD automatically when Ubuntu boots.
 - Restarts the engine 15 seconds after an unexpected failure.
+- Restarts Futu OpenD 5 seconds after an unexpected failure.
 - Restarts the engine every Sunday at `03:00 America/New_York`.
 - Runs strategy restart actions whenever the engine starts.
 - Runs a missed weekly restart after the server comes back online.
@@ -29,6 +31,7 @@ sudo apt-get install -y python3 python3-venv
 ```
 
 Before installing, review `trading/config/futu_config.py`. Confirm the trading environment and remote OpenD address are correct. The installer enables and starts the engine immediately.
+Confirm Futu OpenD is installed at `/home/laurence/Documents/Futu_OpenD/FutuOpenD`.
 
 ## Install
 
@@ -41,7 +44,7 @@ python3 -m venv .venv
 sudo deploy/install-systemd.sh "$USER" "$PWD"
 ```
 
-The installer validates the virtual environment and secret files, restricts secret-file permissions, installs the service units, and enables both the engine and weekly timer.
+The installer validates the virtual environment and secret files, restricts secret-file permissions, installs the service units, and enables Futu OpenD, the engine, and the weekly timer.
 
 ## Telegram Webhook
 
@@ -63,20 +66,23 @@ Expose `https://option-wheel.ubuntu-nuc.com:8443/<webhook_path_secret>` with a v
 
 ```bash
 sudo systemctl status option-wheel.service
+sudo systemctl status futu-api.service
 systemctl list-timers option-wheel-weekly-restart.timer
 journalctl -u option-wheel.service -n 100 --no-pager
+journalctl -u futu-api.service -n 100 --no-pager
 ```
 
 To follow logs continuously:
 
 ```bash
 journalctl -u option-wheel.service -f
+journalctl -u futu-api.service -f
 ```
 
 To validate the installed units and exercise the weekly restart path manually:
 
 ```bash
-sudo systemd-analyze verify /etc/systemd/system/option-wheel*.service /etc/systemd/system/option-wheel*.timer
+sudo systemd-analyze verify /etc/systemd/system/futu-api.service /etc/systemd/system/option-wheel*.service /etc/systemd/system/option-wheel*.timer
 sudo systemctl start option-wheel-weekly-restart.service
 ```
 
@@ -89,9 +95,13 @@ sudo systemctl restart option-wheel.service
 sudo systemctl stop option-wheel.service
 sudo systemctl start option-wheel.service
 sudo systemctl status option-wheel.service
+sudo systemctl restart futu-api.service
+sudo systemctl stop futu-api.service
+sudo systemctl start futu-api.service
+sudo systemctl status futu-api.service
 ```
 
-These commands affect only the Python trading engine. They do not restart the remote OpenD server.
+The `option-wheel.service` commands affect only the Python trading engine. The `futu-api.service` commands affect only local Futu OpenD.
 
 ## Update
 

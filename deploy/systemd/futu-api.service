@@ -1,0 +1,15 @@
+[Unit]
+Description=Start Futu OpenD API
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+WorkingDirectory=/home/@APP_USER@/Documents/Futu_OpenD/
+ExecStart=/home/@APP_USER@/Documents/Futu_OpenD/FutuOpenD
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

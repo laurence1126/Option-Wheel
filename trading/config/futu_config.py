@@ -7,7 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SysConfig.enable_proto_encrypt(True)
 SysConfig.set_init_rsa_file(str(PROJECT_ROOT / ".RSA_private_key"))
 
-FUTU_OPEND_ADDRESS = "100.64.0.1"
+FUTU_OPEND_ADDRESS = "127.0.0.1"
 FUTU_OPEND_PORT = 22222
 
 TRADING_ENVIRONMENT = TrdEnv.SIMULATE
