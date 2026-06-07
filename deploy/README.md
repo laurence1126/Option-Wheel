@@ -8,6 +8,7 @@ This deployment runs the local Python trading engine and local Futu OpenD API as
 - Starts Futu OpenD automatically when Ubuntu boots.
 - Restarts the engine 15 seconds after an unexpected failure.
 - Restarts Futu OpenD 5 seconds after an unexpected failure.
+- Waits for Futu OpenD to answer a Python SDK readiness check before starting the trading engine.
 - Restarts the engine every Sunday at `03:00 America/New_York`.
 - Runs strategy restart actions whenever the engine starts.
 - Runs a missed weekly restart after the server comes back online.
@@ -127,3 +128,4 @@ journalctl -u option-wheel.service -n 200 --no-pager
 ```
 
 Common startup failures are missing secret files, incorrect `.config` values, an unreachable remote OpenD server, or dependencies not installed in `.venv`.
+If `option-wheel.service` is waiting or failing before Python starts, inspect the Futu readiness check with `journalctl -u option-wheel.service -n 100 --no-pager`.

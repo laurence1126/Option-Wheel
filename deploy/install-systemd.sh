@@ -37,29 +37,6 @@ escape_sed_replacement() {
 
 escaped_app_user="$(escape_sed_replacement "$APP_USER")"
 escaped_app_dir="$(escape_sed_replacement "$APP_DIR")"
-futu_config_values="$(
-    cd "$APP_DIR"
-    "$APP_DIR/.venv/bin/python" - <<'PY'
-import ast
-from pathlib import Path
-
-config_path = Path("trading/config/futu_config.py")
-values = {}
-for node in ast.parse(config_path.read_text()).body:
-    if not isinstance(node, ast.Assign):
-        continue
-    for target in node.targets:
-        if isinstance(target, ast.Name) and target.id in {"FUTU_OPEND_ADDRESS", "FUTU_OPEND_PORT"}:
-            values[target.id] = ast.literal_eval(node.value)
-
-print(values["FUTU_OPEND_ADDRESS"])
-print(values["FUTU_OPEND_PORT"])
-PY
-)"
-futu_opend_address="$(printf '%s\n' "$futu_config_values" | sed -n '1p')"
-futu_opend_port="$(printf '%s\n' "$futu_config_values" | sed -n '2p')"
-escaped_futu_opend_address="$(escape_sed_replacement "$futu_opend_address")"
-escaped_futu_opend_port="$(escape_sed_replacement "$futu_opend_port")"
 rendered_service="$(mktemp)"
 rendered_futu_api_service="$(mktemp)"
 trap 'rm -f "$rendered_service" "$rendered_futu_api_service"' EXIT
@@ -67,8 +44,6 @@ trap 'rm -f "$rendered_service" "$rendered_futu_api_service"' EXIT
 sed \
     -e "s|@APP_USER@|$escaped_app_user|g" \
     -e "s|@APP_DIR@|$escaped_app_dir|g" \
-    -e "s|@FUTU_OPEND_ADDRESS@|$escaped_futu_opend_address|g" \
-    -e "s|@FUTU_OPEND_PORT@|$escaped_futu_opend_port|g" \
     "$SCRIPT_DIR/systemd/option-wheel.service" > "$rendered_service"
 
 sed \
