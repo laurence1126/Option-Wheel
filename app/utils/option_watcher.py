@@ -38,7 +38,7 @@ def get_watcher_data() -> tuple[pd.DataFrame, float | None]:
         for _, position in positions.iterrows():
             match = OPTION_PATTERN.match(str(position["stock_name"]))
             qty = int(float(position["qty"]))
-            if not match or qty == 0 or match.group("type") != "P":
+            if not match or qty >= 0 or match.group("type") != "P":
                 continue
 
             ticker = match.group("symbol")
