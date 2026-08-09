@@ -15,6 +15,7 @@ from .utils.put_selection import *
 from .lifecycle.short_put import *
 from .lifecycle.cut_loss import *
 from .lifecycle.assignment import *
+from .lifecycle.daily_summary import *
 
 
 class ShortPutStrategy(TradingStrategyBase):
@@ -49,6 +50,7 @@ class ShortPutStrategy(TradingStrategyBase):
         self.engine.add_daily_time_trigger("setup_cut_loss_monitor", pd.to_datetime("09:20").time())
         self.engine.add_daily_time_trigger("execute_short_put_strategy", pd.to_datetime("15:50").time())
         self.engine.add_daily_time_trigger("alert_assignment_at_close", pd.to_datetime("16:00").time())
+        self.engine.add_daily_time_trigger("send_daily_summary", pd.to_datetime("16:30").time())
         self.engine.add_daily_time_trigger("clear_all_subscriptions", pd.to_datetime("20:00").time())
 
     def on_time_trigger(self, name: str):
@@ -66,6 +68,9 @@ class ShortPutStrategy(TradingStrategyBase):
         elif name == "alert_assignment_at_close":
             alert_assignment_at_close(self)
 
+        elif name == "send_daily_summary":
+            send_daily_summary(self)
+
         elif name == "clear_all_subscriptions":
             logger.info("Clearing all subscriptions to free up resources.")
             self.engine.cancel_open_orders(self.acc_id)
@@ -77,6 +82,7 @@ class ShortPutStrategy(TradingStrategyBase):
             "setup_cut_loss_monitor": setup_cut_loss_monitor,
             "execute_short_put_strategy": execute_short_put_strategy,
             "alert_assignment_at_close": alert_assignment_at_close,
+            "send_daily_summary": send_daily_summary,
         }
 
     def get_restart_actions(self):

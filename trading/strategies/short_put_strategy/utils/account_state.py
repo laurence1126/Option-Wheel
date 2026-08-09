@@ -22,14 +22,21 @@ def get_underlying_market_state(strategy: ShortPutStrategy) -> object | None:
     return market_state.iloc[0]["market_state"]
 
 
-def get_total_cash(strategy: ShortPutStrategy) -> float | None:
+def get_net_asset_value(strategy: ShortPutStrategy) -> float:
+    account_info = strategy.engine.get_account_info(strategy.acc_id)
+    if account_info is None or account_info.empty:
+        return None
+    return float(account_info.iloc[0]["total_assets"])
+
+
+def get_total_cash(strategy: ShortPutStrategy, capped: bool = True) -> float | None:
     account_info = strategy.engine.get_account_info(strategy.acc_id)
     if account_info is None or account_info.empty:
         return None
 
     res = account_info.iloc[0].copy()
     capital = res["fund_assets"] + res["cash"] if strategy.acc_id == strategy.engine.margin_account else res["cash"]
-    if strategy.config.max_capital is not None:
+    if strategy.config.max_capital is not None and capped:
         capital = min(capital, strategy.config.max_capital)
 
     return capital

@@ -20,6 +20,7 @@ from trading.notification.telegram_consts import (
     EMPTY_INLINE_KEYBOARD,
     RESTART_ENV_VAR,
     SHORT_PUT_ACTION_ID,
+    SUMMARY_ACTION_ID,
     SHORT_PUT_CONFIRMATION_TIMEOUT_SECONDS,
     OPTION_WATCHER_APP_URL,
 )
@@ -190,6 +191,8 @@ class TelegramTradingHandler:
                 self.bot.send_message("😰 Failed to send latest log file.")
         elif command == "/shortput":
             self._request_shortput_confirmation()
+        elif command == "/summary":
+            self._send_strategy_summaries()
         elif command == "/shutdown":
             self._request_shutdown_confirmation()
         elif command == "/restart":
@@ -577,6 +580,47 @@ class TelegramTradingHandler:
         finally:
             with self._lock:
                 self._shortput_running = False
+
+    def _send_strategy_summaries(self) -> None:
+        if self.engine is None:
+            self.send_message("Trading engine unavailable.")
+            return
+
+        strategies = getattr(self.engine, "strategy", {})
+        if not isinstance(strategies, dict) or not strategies:
+            self.send_message("Daily summary unavailable.")
+            return
+
+        summary_actions: list[tuple[str, object, Callable[..., object]]] = []
+        for strategy_id, strategy in strategies.items():
+            get_actions = getattr(strategy, "get_strategy_actions", None)
+            if not callable(get_actions):
+                continue
+            actions = get_actions()
+            if not isinstance(actions, dict):
+                continue
+            action = actions.get(SUMMARY_ACTION_ID)
+            if callable(action):
+                summary_actions.append((strategy_id, strategy, action))
+
+        if not summary_actions:
+            self.send_message("Daily summary unavailable.")
+            return
+
+        failed_strategy_ids = []
+        for strategy_id, strategy, action in summary_actions:
+            try:
+                result = action(strategy)
+            except Exception:
+                logger.exception("Daily summary command failed: strategy_id=%s.", strategy_id)
+                failed_strategy_ids.append(strategy_id)
+                continue
+            if result is False:
+                logger.warning("Daily summary command failed: strategy_id=%s returned False.", strategy_id)
+                failed_strategy_ids.append(strategy_id)
+
+        if failed_strategy_ids:
+            self.send_message(f"Daily summary failed: {', '.join(failed_strategy_ids)}")
 
     ####################################################################################################
     # Strategy Retry Callback Handling

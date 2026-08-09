@@ -22,15 +22,21 @@ from app.utils.telegram import TelegramConfig
 class FakeStrategy:
     def __init__(self) -> None:
         self.execute_short_put_calls = 0
+        self.send_daily_summary_calls = 0
         self.lock = threading.RLock()
 
     def execute_short_put_strategy(self, strategy=None) -> None:
         self.execute_short_put_calls += 1
 
+    def send_daily_summary(self, strategy=None) -> bool:
+        self.send_daily_summary_calls += 1
+        return True
+
     def get_strategy_actions(self):
         return {
             "execute_short_put": self.execute_short_put_strategy,
             "execute_short_put_strategy": self.execute_short_put_strategy,
+            "send_daily_summary": self.send_daily_summary,
         }
 
 
@@ -118,7 +124,7 @@ class TelegramBotServiceTest(unittest.TestCase):
             self.assertIs(set_commands.call_args.args[0], config)
             self.assertEqual(
                 [command["command"] for command in set_commands.call_args.args[1]],
-                ["status", "log", "watcher", "shortput", "restart", "shutdown", "help", "start"],
+                ["status", "log", "watcher", "shortput", "summary", "restart", "shutdown", "help", "start"],
             )
             set_menu.assert_called_once_with(config)
             set_webhook.assert_called_once_with(
@@ -136,6 +142,10 @@ class TelegramBotServiceTest(unittest.TestCase):
     def test_command_consts_include_watcher(self):
         self.assertIn("watcher", [command["command"] for command in BOT_COMMANDS])
         self.assertIn("/watcher - Open the option watcher app", HELP_TEXT)
+
+    def test_command_consts_include_summary(self):
+        self.assertIn("summary", [command["command"] for command in BOT_COMMANDS])
+        self.assertIn("/summary - Send daily strategy summary", HELP_TEXT)
 
     def test_start_returns_immediately_when_already_running(self):
         service = self.make_service()
@@ -441,6 +451,34 @@ class TelegramBotServiceTest(unittest.TestCase):
 
         send_message.assert_not_called()
         self.assertEqual(service._pending_shortput_confirmations, {})
+
+    def test_summary_command_sends_daily_summary_for_all_strategies(self):
+        service = self.make_service()
+        service.config = self.make_config()
+        service.enabled = True
+        service.engine = FakeEngine()
+        first_strategy = service.engine.strategy["short_put"]
+        second_strategy = FakeStrategy()
+        service.engine.strategy["short_put_qqq"] = second_strategy
+
+        with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service.handle_message({"chat": {"id": "123"}, "text": "/summary"})
+
+        self.assertEqual(first_strategy.send_daily_summary_calls, 1)
+        self.assertEqual(second_strategy.send_daily_summary_calls, 1)
+        send_message.assert_not_called()
+
+    def test_summary_command_reports_unavailable_when_no_strategy_has_action(self):
+        service = self.make_service()
+        service.config = self.make_config()
+        service.enabled = True
+        service.engine = FakeEngine()
+        service.engine.strategy = {"other": object()}
+
+        with patch("app.telegram_bot.send_telegram_message", return_value=(True, 1)) as send_message:
+            service.handle_message({"chat": {"id": "123"}, "text": "/summary"})
+
+        send_message.assert_called_once_with(service.config, "Daily summary unavailable.")
 
     def test_shortput_command_rejects_missing_strategy_action_without_pending_confirmation(self):
         service = self.make_service()

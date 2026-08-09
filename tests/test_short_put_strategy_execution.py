@@ -8,6 +8,7 @@ from trading.config.trading_config import ShortPutLiveConfig
 from trading.trading_engine.execution_engine import ExecutionResult, LimitOrderRequest, PriceLadderPlan, build_price_ladder
 from trading.strategies.short_put_strategy.lifecycle.assignment import alert_assignment_at_close
 from trading.strategies.short_put_strategy.lifecycle.cut_loss import setup_cut_loss_monitor
+from trading.strategies.short_put_strategy.lifecycle.daily_summary import send_daily_summary
 from trading.strategies.short_put_strategy.lifecycle.short_put import (
     _execution_checklist,
     _build_execution_requests,
@@ -42,7 +43,7 @@ class FakeEngine:
         self.order_list_results = []
         self.open_position_result = pd.DataFrame()
         self.market_state_result = pd.DataFrame([{"market_state": "AFTERNOON"}])
-        self.account_info_result = pd.DataFrame([{"cash": 100000.0, "fund_assets": 100000.0}])
+        self.account_info_result = pd.DataFrame([{"cash": 100000.0, "fund_assets": 100000.0, "total_assets": 100000.0}])
         self.stock_quote_result = pd.DataFrame()
         self.top_order_book_result = {"code": "US.SPY", "bid_price": 722.95, "bid_volume": 1000, "ask_price": 723.05, "ask_volume": 1200}
         self.subscriptions = []
@@ -224,6 +225,44 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
             ]
         )
 
+    def mixed_position_list_for_daily_summary(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "code": "US.SPY260527P723000",
+                    "stock_name": "SPY260527P723000",
+                    "qty": -2,
+                    "cost_price": 1.25,
+                    "market_val": -260.0,
+                    "pl_val": -10.0,
+                },
+                {
+                    "code": "US.SPY260527C723000",
+                    "stock_name": "SPY260527C723000",
+                    "qty": -1,
+                    "cost_price": 1.75,
+                    "market_val": -180.0,
+                    "pl_val": -5.0,
+                },
+                {
+                    "code": "US.QQQ260527P500000",
+                    "stock_name": "QQQ260527P500000",
+                    "qty": -3,
+                    "cost_price": 2.0,
+                    "market_val": -660.0,
+                    "pl_val": -60.0,
+                },
+                {
+                    "code": "US.SPY260527P700000",
+                    "stock_name": "SPY260527P700000",
+                    "qty": 1,
+                    "cost_price": 0.75,
+                    "market_val": 80.0,
+                    "pl_val": 5.0,
+                },
+            ]
+        )
+
     def maturing_short_put_position(self, qty=-2, average_cost=1.0, strike=723.0) -> pd.DataFrame:
         expiration = pd.Timestamp.today().strftime("%y%m%d")
         strike_text = f"{int(strike * 1000):06d}"
@@ -288,6 +327,14 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
 
         trigger = next(item for item in engine.time_triggers if item["name"] == "setup_cut_loss_monitor")
         self.assertEqual(str(trigger["trigger_time"]), "09:20:00")
+
+    def test_setup_time_triggers_adds_daily_summary_after_close(self):
+        strategy, engine = self.make_strategy()
+
+        strategy.setup_time_triggers()
+
+        trigger = next(item for item in engine.time_triggers if item["name"] == "send_daily_summary")
+        self.assertEqual(str(trigger["trigger_time"]), "16:30:00")
 
     def test_restart_actions_refresh_maturing_strikes_before_cut_loss_monitor(self):
         strategy, _ = self.make_strategy()
@@ -431,9 +478,11 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         strategy.config.telegram_approval["short_put"] = True
 
         with (
-            patch("trading.strategies.short_put_strategy.short_put._execution_checklist", return_value=True),
-            patch("trading.strategies.short_put_strategy.short_put.select_short_put", side_effect=lambda strategy_arg: self.selected_option()),
-            patch("trading.strategies.short_put_strategy.short_put.get_max_num_to_short", return_value=80),
+            patch("trading.strategies.short_put_strategy.lifecycle.short_put._execution_checklist", return_value=True),
+            patch(
+                "trading.strategies.short_put_strategy.lifecycle.short_put.select_short_put", side_effect=lambda strategy_arg: self.selected_option()
+            ),
+            patch("trading.strategies.short_put_strategy.lifecycle.short_put.get_max_num_to_short", return_value=80),
         ):
             execute_short_put_strategy(strategy)
 
@@ -479,6 +528,50 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         option_name = resolve_option_info(strategy._put_option_position[0])
 
         self.assertEqual(option_name, "SPY 723.00 Put (2026-05-27)")
+
+    def test_daily_summary_sends_strategy_owned_short_put_positions_only(self):
+        strategy, engine = self.make_strategy()
+        engine.account_info_result = pd.DataFrame([{"cash": 100000.0, "fund_assets": 100000.0, "total_assets": 99740.0}])
+        engine.open_position_result = self.mixed_position_list_for_daily_summary()
+
+        result = send_daily_summary(strategy)
+
+        self.assertTrue(result)
+        self.assertEqual(len(engine.telegram.messages), 1)
+        message = engine.telegram.messages[0]
+        self.assertEqual(message["parse_mode"], "HTML")
+        self.assertIn("DAILY STRATEGY SUMMARY", message["text"])
+        self.assertIn("Strategy: <b>short_put_spy</b>", message["text"])
+        self.assertIn("Total NAV: <b>$99,740.00</b>", message["text"])
+        self.assertIn("Total Cash: <b>$100,000.00</b>", message["text"])
+        self.assertIn("MV (Strategy): <b>$-260.00</b>", message["text"])
+        self.assertIn("<b>Strategy Positions</b>", message["text"])
+        self.assertIn("SPY 723.00 Put (2026-05-27)", message["text"])
+        self.assertIn(" • SPY 723.00 Put (2026-05-27)\n   Qty: -2 | Avg: 1.2500 | PnL: $-10.00", message["text"])
+        self.assertIn("PnL: $-10.00", message["text"])
+        self.assertNotIn("SPY260527C723000", message["text"])
+        self.assertNotIn("QQQ", message["text"])
+        self.assertNotIn("700.00 Put", message["text"])
+
+    def test_daily_summary_reports_no_positions_when_strategy_has_none(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = pd.DataFrame(
+            [
+                {
+                    "code": "US.QQQ260527P500000",
+                    "stock_name": "QQQ260527P500000",
+                    "qty": -3,
+                    "cost_price": 2.0,
+                    "market_val": -660.0,
+                }
+            ]
+        )
+
+        result = send_daily_summary(strategy)
+
+        self.assertTrue(result)
+        self.assertIn("MV (Strategy): <b>$0.00</b>", engine.telegram.messages[0]["text"])
+        self.assertIn("<b>Strategy Positions</b>\n • N/A", engine.telegram.messages[0]["text"])
 
     def test_prepare_cut_loss_monitor_ignores_when_stop_loss_disabled(self):
         strategy, engine = self.make_strategy()
@@ -602,9 +695,11 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         )
 
         with (
-            patch("trading.strategies.short_put_strategy.short_put._execution_checklist", return_value=True),
-            patch("trading.strategies.short_put_strategy.short_put.select_short_put", side_effect=lambda strategy_arg: self.selected_option()),
-            patch("trading.strategies.short_put_strategy.short_put.get_max_num_to_short", return_value=80),
+            patch("trading.strategies.short_put_strategy.lifecycle.short_put._execution_checklist", return_value=True),
+            patch(
+                "trading.strategies.short_put_strategy.lifecycle.short_put.select_short_put", side_effect=lambda strategy_arg: self.selected_option()
+            ),
+            patch("trading.strategies.short_put_strategy.lifecycle.short_put.get_max_num_to_short", return_value=80),
         ):
             execute_short_put_strategy(strategy)
 
@@ -645,10 +740,12 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         engine.telegram.approval_result = False
 
         with (
-            patch("trading.strategies.short_put_strategy.short_put._execution_checklist", return_value=True),
-            patch("trading.strategies.short_put_strategy.short_put.select_short_put", side_effect=lambda strategy_arg: self.selected_option()),
-            patch("trading.strategies.short_put_strategy.short_put.get_max_num_to_short", return_value=80),
-            patch("trading.strategies.short_put_strategy.short_put._build_execution_requests", return_value=execution_requests),
+            patch("trading.strategies.short_put_strategy.lifecycle.short_put._execution_checklist", return_value=True),
+            patch(
+                "trading.strategies.short_put_strategy.lifecycle.short_put.select_short_put", side_effect=lambda strategy_arg: self.selected_option()
+            ),
+            patch("trading.strategies.short_put_strategy.lifecycle.short_put.get_max_num_to_short", return_value=80),
+            patch("trading.strategies.short_put_strategy.lifecycle.short_put._build_execution_requests", return_value=execution_requests),
         ):
             execute_short_put_strategy(strategy)
 
@@ -683,10 +780,12 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         ]
 
         with (
-            patch("trading.strategies.short_put_strategy.short_put._execution_checklist", return_value=True),
-            patch("trading.strategies.short_put_strategy.short_put.select_short_put", side_effect=lambda strategy_arg: self.selected_option()),
-            patch("trading.strategies.short_put_strategy.short_put.get_max_num_to_short", return_value=80),
-            patch("trading.strategies.short_put_strategy.short_put._build_execution_requests", return_value=execution_requests),
+            patch("trading.strategies.short_put_strategy.lifecycle.short_put._execution_checklist", return_value=True),
+            patch(
+                "trading.strategies.short_put_strategy.lifecycle.short_put.select_short_put", side_effect=lambda strategy_arg: self.selected_option()
+            ),
+            patch("trading.strategies.short_put_strategy.lifecycle.short_put.get_max_num_to_short", return_value=80),
+            patch("trading.strategies.short_put_strategy.lifecycle.short_put._build_execution_requests", return_value=execution_requests),
         ):
             execute_short_put_strategy(strategy)
 
