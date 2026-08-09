@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 from typing import TYPE_CHECKING, Any
 from dataclasses import dataclass
 from futu import SubType, TrdSide
@@ -156,6 +157,15 @@ def execute_cut_loss(strategy: ShortPutStrategy, watch: CutLossWatch, order_book
     )
     logger.info("Cut-loss execution completed: requested_qty=%s, filled_qty=%s, child_orders=%s.", requested_qty, filled_qty, len(requests))
     _refresh_cut_loss_watchlist(strategy, watch.code)
+
+
+def is_cut_loss_execution_time(cut_loss_earliest_time: dt.time, current_time: dt.time | None = None) -> bool:
+    if current_time is None and cut_loss_earliest_time.tzinfo is not None:
+        current_time = dt.datetime.now(cut_loss_earliest_time.tzinfo).timetz()
+    elif current_time is None:
+        current_time = dt.datetime.now().time()
+
+    return current_time.replace(tzinfo=None) >= cut_loss_earliest_time.replace(tzinfo=None)
 
 
 def _build_execution_requests(strategy: ShortPutStrategy, watch: CutLossWatch, bid_price: float, ask_price: float) -> list[LimitOrderRequest] | None:

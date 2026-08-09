@@ -1,5 +1,7 @@
+import datetime as dt
 from dataclasses import dataclass, field
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 
 @dataclass
@@ -20,6 +22,7 @@ class ShortPutLiveConfig:
     price_ladder_steps: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
     order_wait_seconds: int = 5
     cancel_wait_seconds: int = 5
+    cut_loss_earliest_time: dt.time = dt.time(9, 45, tzinfo=ZoneInfo("America/New_York"))
     telegram_approval: dict[str, bool] = field(default_factory=lambda: {"short_put": False, "cut_loss": False})
     telegram_approval_timeout: int = 60
 

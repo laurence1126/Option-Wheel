@@ -1,5 +1,7 @@
+import datetime as dt
 import unittest
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from futu import SubType, TrdEnv, TrdSide
@@ -7,7 +9,7 @@ from futu import SubType, TrdEnv, TrdSide
 from trading.config.trading_config import ShortPutLiveConfig
 from trading.trading_engine.execution_engine import ExecutionResult, LimitOrderRequest, PriceLadderPlan, build_price_ladder
 from trading.strategies.short_put_strategy.lifecycle.assignment import alert_assignment_at_close
-from trading.strategies.short_put_strategy.lifecycle.cut_loss import setup_cut_loss_monitor
+from trading.strategies.short_put_strategy.lifecycle.cut_loss import is_cut_loss_execution_time, setup_cut_loss_monitor
 from trading.strategies.short_put_strategy.lifecycle.daily_summary import send_daily_summary
 from trading.strategies.short_put_strategy.lifecycle.short_put import (
     _execution_checklist,
@@ -184,6 +186,11 @@ class FakeTelegram:
 
 
 class ShortPutStrategyExecutionTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.cut_loss_time_gate_patcher = patch("trading.strategies.short_put_strategy.strategy_main.is_cut_loss_execution_time", return_value=True)
+        self.cut_loss_time_gate = self.cut_loss_time_gate_patcher.start()
+        self.addCleanup(self.cut_loss_time_gate_patcher.stop)
+
     def make_strategy(self) -> tuple[ShortPutStrategy, FakeEngine]:
         config = ShortPutLiveConfig(
             max_contracts_per_trade=30,
@@ -607,6 +614,28 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         self.assertIn("Filled Quantity: <b>12</b>", engine.telegram.messages[1]["text"])
         self.assertIsNone(engine.telegram.messages[1]["reply_markup"])
         self.assertEqual(engine.telegram.messages[1]["parse_mode"], "HTML")
+
+    def test_cut_loss_orderbook_skips_before_10_am_et(self):
+        strategy, engine = self.make_strategy()
+        self.prepare_cut_loss_watch(strategy, engine, average_cost=1.0)
+        self.cut_loss_time_gate.return_value = False
+
+        strategy.on_orderbook(self.orderbook(bid_price=1.48, ask_price=1.51))
+
+        self.assertEqual(engine.execution_calls, [])
+        watch = strategy._cut_loss_watchlist["US.SPY260527P723000"]
+        self.assertFalse(watch.executing)
+
+    def test_cut_loss_time_gate_starts_at_10_am(self):
+        cut_loss_earliest_time = dt.time(10, 0)
+
+        self.assertFalse(is_cut_loss_execution_time(cut_loss_earliest_time, dt.time(9, 59, 59)))
+        self.assertTrue(is_cut_loss_execution_time(cut_loss_earliest_time, dt.time(10, 0)))
+
+    def test_cut_loss_config_default_time_is_new_york(self):
+        strategy, _ = self.make_strategy()
+
+        self.assertEqual(strategy.config.cut_loss_earliest_time, dt.time(10, 0, tzinfo=ZoneInfo("America/New_York")))
 
     def test_cut_loss_orderbook_does_not_trigger_below_rounded_mid_signal(self):
         strategy, engine = self.make_strategy()

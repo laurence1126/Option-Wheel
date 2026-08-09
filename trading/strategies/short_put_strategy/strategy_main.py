@@ -111,6 +111,9 @@ class ShortPutStrategy(TradingStrategyBase):
         top_book = self.engine.process_top_orderbook(data)
         if top_book is None:
             return
+        if not is_cut_loss_execution_time(self.config.cut_loss_earliest_time):
+            logger.info("Cut-loss monitor skipped before %s New York time.", self.config.cut_loss_earliest_time.strftime("%H:%M"))
+            return
 
         code = top_book["code"]
         bid_price = top_book["bid_price"]
