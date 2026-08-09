@@ -35,4 +35,6 @@ SHORT_PUT_CONFIG = ShortPutLiveConfig(
     take_profit_multiple=None,
     target_exp_days=12,
     leverage_ratio=5.0,
+    max_contracts_per_trade=50,
+    max_order_book_participation=1,
 )
