@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Callable
 
 import pandas as pd
 
-from app.telegram_bot import TelegramBotService
+from app.telegram_bot import TelegramBotService, TelegramUpdateHandler
 from app.utils.telegram import answer_telegram_callback_query as answer_callback_query
 from app.utils.telegram import edit_telegram_message_text
 from trading.notification.telegram_callbacks import parse_strategy_callback
@@ -48,7 +48,7 @@ class PendingShortPut:
     selected_strategy_id: str | None = None
 
 
-class TelegramTradingHandler:
+class TelegramTradingHandler(TelegramUpdateHandler):
     def __init__(
         self,
         config_path: str = ".config",
