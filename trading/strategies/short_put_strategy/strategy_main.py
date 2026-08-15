@@ -6,9 +6,6 @@ from trading.strategies.trading_strategy_base import TradingStrategyBase
 from trading.trading_engine.execution_engine import round_up_to_tick
 from app.utils.logging import configure_logger
 
-logger = configure_logger(__name__)
-
-
 from .utils.option_parsing import *
 from .utils.account_state import *
 from .utils.put_selection import *
@@ -16,6 +13,9 @@ from .lifecycle.short_put import *
 from .lifecycle.cut_loss import *
 from .lifecycle.assignment import *
 from .lifecycle.daily_summary import *
+from .lifecycle.account_snapshot import *
+
+logger = configure_logger(__name__)
 
 
 class ShortPutStrategy(TradingStrategyBase):
@@ -49,6 +49,7 @@ class ShortPutStrategy(TradingStrategyBase):
         self.engine.add_daily_time_trigger("update_maturing_put_strikes", pd.to_datetime("09:00").time())
         self.engine.add_daily_time_trigger("setup_cut_loss_monitor", pd.to_datetime("09:20").time())
         self.engine.add_daily_time_trigger("execute_short_put_strategy", pd.to_datetime("15:50").time())
+        self.engine.add_daily_time_trigger("capture_account_snapshot", pd.to_datetime("16:00").time())
         self.engine.add_daily_time_trigger("alert_assignment_at_close", pd.to_datetime("16:00").time())
         self.engine.add_daily_time_trigger("send_daily_summary", pd.to_datetime("16:30").time())
         self.engine.add_daily_time_trigger("clear_all_subscriptions", pd.to_datetime("20:00").time())
@@ -68,6 +69,9 @@ class ShortPutStrategy(TradingStrategyBase):
         elif name == "alert_assignment_at_close":
             alert_assignment_at_close(self)
 
+        elif name == "capture_account_snapshot":
+            capture_account_snapshot(self)
+
         elif name == "send_daily_summary":
             send_daily_summary(self)
 
@@ -81,6 +85,7 @@ class ShortPutStrategy(TradingStrategyBase):
             "update_maturing_put_strikes": update_maturing_put_strikes,
             "setup_cut_loss_monitor": setup_cut_loss_monitor,
             "execute_short_put_strategy": execute_short_put_strategy,
+            "capture_account_snapshot": capture_account_snapshot,
             "alert_assignment_at_close": alert_assignment_at_close,
             "send_daily_summary": send_daily_summary,
         }

@@ -14,12 +14,28 @@ class FakeTradeContext:
     def __init__(self) -> None:
         self.place_response = (RET_OK, pd.DataFrame([{"order_id": "1"}]))
         self.modify_response = (RET_OK, pd.DataFrame([{"order_id": "1"}]))
+        self.history_response = (RET_OK, pd.DataFrame([{"order_id": "history-1"}]))
+        self.history_order_kwargs = None
 
     def place_order(self, **kwargs):
         return self.place_response
 
     def modify_order(self, *args, **kwargs):
         return self.modify_response
+
+    def history_order_list_query(self, **kwargs):
+        self.history_order_kwargs = kwargs
+        return self.history_response
+
+
+class FakeQuoteContext:
+    def __init__(self) -> None:
+        self.market_snapshot_response = (RET_OK, pd.DataFrame([{"code": "US.TEST", "last_price": 1.23}]))
+        self.market_snapshot_code_list = None
+
+    def get_market_snapshot(self, code_list):
+        self.market_snapshot_code_list = code_list
+        return self.market_snapshot_response
 
 
 class FakeTelegram:
@@ -130,7 +146,9 @@ class FutuTradingEngineOrderWrapperTest(unittest.TestCase):
         engine = object.__new__(FutuTradingEngine)
         trade_context = FakeTradeContext()
         engine.trade_context = trade_context
+        engine.quote_context = FakeQuoteContext()
         engine.trading_environment = TrdEnv.SIMULATE
+        engine.trading_market = None
         return engine, trade_context
 
     def test_place_limit_order_returns_order_id_when_response_is_valid(self):
@@ -139,6 +157,25 @@ class FutuTradingEngineOrderWrapperTest(unittest.TestCase):
         order_id = engine.place_limit_order(acc_id=1, code="US.TEST", side=TrdSide.SELL, qty=10, price=1.0)
 
         self.assertEqual(order_id, "1")
+
+    def test_history_order_list_query_returns_dataframe_when_response_is_valid(self):
+        engine, trade_context = self.make_engine()
+
+        orders = engine.history_order_list_query(acc_id=1, code="US.TEST", start="2026-08-13 16:00:00", end="2026-08-14 16:00:00")
+
+        self.assertEqual(orders.iloc[0]["order_id"], "history-1")
+        self.assertEqual(trade_context.history_order_kwargs["acc_id"], 1)
+        self.assertEqual(trade_context.history_order_kwargs["code"], "US.TEST")
+        self.assertEqual(trade_context.history_order_kwargs["start"], "2026-08-13 16:00:00")
+        self.assertEqual(trade_context.history_order_kwargs["end"], "2026-08-14 16:00:00")
+
+    def test_get_market_snapshot_returns_dataframe_when_response_is_valid(self):
+        engine, _ = self.make_engine()
+
+        snapshot = engine.get_market_snapshot(["US.TEST"])
+
+        self.assertEqual(snapshot.iloc[0]["last_price"], 1.23)
+        self.assertEqual(engine.quote_context.market_snapshot_code_list, ["US.TEST"])
 
     def test_place_limit_order_returns_none_when_response_has_no_order_id(self):
         engine, trade_context = self.make_engine()

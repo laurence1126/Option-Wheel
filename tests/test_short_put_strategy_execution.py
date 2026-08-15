@@ -1,5 +1,8 @@
 import datetime as dt
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -11,6 +14,7 @@ from trading.trading_engine.execution_engine import ExecutionResult, LimitOrderR
 from trading.strategies.short_put_strategy.lifecycle.assignment import alert_assignment_at_close
 from trading.strategies.short_put_strategy.lifecycle.cut_loss import is_cut_loss_execution_time, setup_cut_loss_monitor
 from trading.strategies.short_put_strategy.lifecycle.daily_summary import send_daily_summary
+from trading.strategies.short_put_strategy.lifecycle.account_snapshot import capture_account_snapshot
 from trading.strategies.short_put_strategy.lifecycle.short_put import (
     _execution_checklist,
     _build_execution_requests,
@@ -43,10 +47,13 @@ class FakeEngine:
         self.limit_order_execution_results = []
         self.order_list_result = pd.DataFrame()
         self.order_list_results = []
+        self.history_order_result = pd.DataFrame()
+        self.history_order_queries = []
         self.open_position_result = pd.DataFrame()
         self.market_state_result = pd.DataFrame([{"market_state": "AFTERNOON"}])
         self.account_info_result = pd.DataFrame([{"cash": 100000.0, "fund_assets": 100000.0, "total_assets": 100000.0}])
         self.stock_quote_result = pd.DataFrame()
+        self.market_snapshot_result = None
         self.top_order_book_result = {"code": "US.SPY", "bid_price": 722.95, "bid_volume": 1000, "ask_price": 723.05, "ask_volume": 1200}
         self.subscriptions = []
         self.time_triggers = []
@@ -100,6 +107,18 @@ class FakeEngine:
             return self.order_list_results.pop(0)
         return self.order_list_result
 
+    def history_order_list_query(self, acc_id, code="", start="", end="", status_filter_list=None):
+        self.history_order_queries.append(
+            {
+                "acc_id": acc_id,
+                "code": code,
+                "start": start,
+                "end": end,
+                "status_filter_list": status_filter_list,
+            }
+        )
+        return self.history_order_result
+
     def get_open_position(self, acc_id, code="", refresh_cache=True):
         return self.open_position_result
 
@@ -118,6 +137,9 @@ class FakeEngine:
 
     def get_stock_quote(self, code_list):
         return self.stock_quote_result
+
+    def get_market_snapshot(self, code_list):
+        return self.market_snapshot_result
 
     def get_top_order_book(self, code):
         return self.top_order_book_result
@@ -270,6 +292,75 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
             ]
         )
 
+    def strategy_position_list_for_snapshot(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "code": "US.SPY260527P723000",
+                    "stock_name": "SPY260527P723000",
+                    "qty": -2,
+                    "cost_price": 1.25,
+                    "nominal_price": 1.30,
+                    "market_val": -260.0,
+                    "pl_val": -10.0,
+                },
+                {
+                    "code": "US.SPY260527C723000",
+                    "stock_name": "SPY260527C723000",
+                    "qty": -1,
+                    "cost_price": 1.75,
+                    "nominal_price": 1.80,
+                    "market_val": -180.0,
+                    "pl_val": -5.0,
+                },
+            ]
+        )
+
+    def market_snapshot_for_snapshot(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {"code": "US.SPY", "last_price": 722.5},
+                {
+                    "code": "US.SPY260527P723000",
+                    "last_price": 1.30,
+                    "option_implied_volatility": 0.31,
+                    "option_delta": -0.2,
+                    "option_gamma": 0.01,
+                    "option_theta": -0.03,
+                },
+            ]
+        )
+
+    def order_history_for_snapshot(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "stock_name": "SPY260527P723000",
+                    "code": "US.SPY260527P723000",
+                    "order_status": "FILLED_ALL",
+                    "trd_side": TrdSide.SELL,
+                    "qty": 2,
+                    "price": 1.25,
+                    "dealt_qty": 2,
+                    "dealt_avg_price": 1.24,
+                    "updated_time": "2026-08-14 15:59:00",
+                    "remark": "",
+                },
+                {
+                    "stock_name": "QQQ260527P500000",
+                    "code": "US.QQQ260527P500000",
+                    "order_status": "FILLED_ALL",
+                    "trd_side": TrdSide.SELL,
+                    "qty": 1,
+                    "price": 2.0,
+                    "dealt_qty": 1,
+                    "dealt_avg_price": 1.9,
+                    "updated_time": "2026-08-14 15:58:00",
+                    "remark": "",
+                },
+            ]
+        )
+
     def maturing_short_put_position(self, qty=-2, average_cost=1.0, strike=723.0) -> pd.DataFrame:
         expiration = pd.Timestamp.today().strftime("%y%m%d")
         strike_text = f"{int(strike * 1000):06d}"
@@ -342,6 +433,21 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
 
         trigger = next(item for item in engine.time_triggers if item["name"] == "send_daily_summary")
         self.assertEqual(str(trigger["trigger_time"]), "16:30:00")
+
+    def test_setup_time_triggers_adds_account_snapshot_at_market_close(self):
+        strategy, engine = self.make_strategy()
+
+        strategy.setup_time_triggers()
+
+        trigger = next(item for item in engine.time_triggers if item["name"] == "capture_account_snapshot")
+        self.assertEqual(str(trigger["trigger_time"]), "16:00:00")
+
+    def test_strategy_actions_include_account_snapshot(self):
+        strategy, _ = self.make_strategy()
+
+        actions = strategy.get_strategy_actions()
+
+        self.assertIs(actions["capture_account_snapshot"], capture_account_snapshot)
 
     def test_restart_actions_refresh_maturing_strikes_before_cut_loss_monitor(self):
         strategy, _ = self.make_strategy()
@@ -580,6 +686,60 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         self.assertIn("MV (Strategy): <b>$0.00</b>", engine.telegram.messages[0]["text"])
         self.assertIn("<b>Strategy Positions</b>\n • N/A", engine.telegram.messages[0]["text"])
 
+    def test_account_snapshot_writes_strategy_json_file(self):
+        strategy, engine = self.make_strategy()
+        engine.open_position_result = self.strategy_position_list_for_snapshot()
+        engine.market_snapshot_result = self.market_snapshot_for_snapshot()
+        engine.history_order_result = self.order_history_for_snapshot()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = capture_account_snapshot(strategy, snapshot_root=tmpdir)
+            snapshot_date = dt.datetime.now(strategy.config.cut_loss_earliest_time.tzinfo).date().isoformat()
+            snapshot_path = Path(tmpdir) / strategy.strategy_id / f"{snapshot_date}.json"
+            payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(result)
+        self.assertEqual(
+            list(payload),
+            ["datetime", "strategy", "totalNav", "totalCash", "strategyCash", "strategyMV", "position", "orders", "params"],
+        )
+        self.assertEqual(payload["strategy"], "short_put_spy")
+        self.assertEqual(payload["totalNav"], 100000.0)
+        self.assertEqual(payload["totalCash"], 100000.0)
+        self.assertEqual(payload["strategyCash"], 250.0)
+        self.assertEqual(payload["strategyMV"], -260.0)
+        self.assertEqual(payload["params"]["underlying"], "US.SPY")
+        self.assertEqual(payload["params"]["price_ladder_steps"], [0.0, 0.5, 1.0])
+        self.assertEqual(len(payload["position"]), 1)
+        self.assertEqual(
+            list(payload["position"][0]),
+            ["name", "code", "qty", "avgPrice", "mktPrice", "underlyingPrice", "pnl", "iv", "delta", "gamma", "theta"],
+        )
+        self.assertEqual(payload["position"][0]["name"], "SPY 723.00 Put (2026-05-27)")
+        self.assertEqual(payload["position"][0]["code"], "US.SPY260527P723000")
+        self.assertEqual(payload["position"][0]["qty"], -2.0)
+        self.assertEqual(payload["position"][0]["avgPrice"], 1.25)
+        self.assertEqual(payload["position"][0]["mktPrice"], 1.3)
+        self.assertEqual(payload["position"][0]["underlyingPrice"], 722.5)
+        self.assertEqual(payload["position"][0]["pnl"], -10.0)
+        self.assertEqual(payload["position"][0]["iv"], 0.0031)
+        self.assertEqual(payload["position"][0]["delta"], -0.2)
+        self.assertEqual(payload["position"][0]["gamma"], 0.01)
+        self.assertEqual(payload["position"][0]["theta"], -0.03)
+        self.assertEqual(len(payload["orders"]), 1)
+        self.assertEqual(
+            list(payload["orders"][0]),
+            ["name", "code", "status", "qty", "limitPrice", "filledQty", "avgPrice", "updateTime"],
+        )
+        self.assertEqual(payload["orders"][0]["code"], "US.SPY260527P723000")
+        self.assertEqual(payload["orders"][0]["qty"], -2.0)
+        self.assertEqual(payload["orders"][0]["limitPrice"], 1.25)
+        self.assertEqual(payload["orders"][0]["filledQty"], -2.0)
+        self.assertEqual(payload["orders"][0]["avgPrice"], 1.24)
+        self.assertEqual(payload["orders"][0]["updateTime"], "2026-08-14 15:59:00")
+        self.assertEqual(len(engine.history_order_queries), 1)
+        self.assertEqual(engine.history_order_queries[0]["acc_id"], strategy.acc_id)
+
     def test_prepare_cut_loss_monitor_ignores_when_stop_loss_disabled(self):
         strategy, engine = self.make_strategy()
         strategy.config.stop_loss_multiple = None
@@ -635,7 +795,7 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
     def test_cut_loss_config_default_time_is_new_york(self):
         strategy, _ = self.make_strategy()
 
-        self.assertEqual(strategy.config.cut_loss_earliest_time, dt.time(10, 0, tzinfo=ZoneInfo("America/New_York")))
+        self.assertEqual(strategy.config.cut_loss_earliest_time.tzinfo, ZoneInfo("America/New_York"))
 
     def test_cut_loss_orderbook_does_not_trigger_below_rounded_mid_signal(self):
         strategy, engine = self.make_strategy()

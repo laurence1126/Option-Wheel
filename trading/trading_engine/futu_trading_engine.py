@@ -356,6 +356,13 @@ class FutuTradingEngine:
             return None
         return data
 
+    def get_market_snapshot(self, code_list: list[str]) -> pd.DataFrame | None:
+        ret, data = self.quote_context.get_market_snapshot(code_list)
+        if ret != RET_OK:
+            logger.error("Get market snapshot failed: %s", data)
+            return None
+        return data
+
     def order_list_query(
         self,
         acc_id: str | int,
@@ -375,6 +382,28 @@ class FutuTradingEngine:
         )
         if ret != RET_OK:
             logger.error("Order list query failed: order_id=%s, code=%s, error=%s", order_id, code, data)
+            return None
+        return data
+
+    def history_order_list_query(
+        self,
+        acc_id: str | int,
+        code: str = "",
+        start: str = "",
+        end: str = "",
+        status_filter_list: list[OrderStatus] | None = None,
+    ) -> pd.DataFrame | None:
+        ret, data = self.trade_context.history_order_list_query(
+            status_filter_list=status_filter_list or [],
+            code=code,
+            start=start,
+            end=end,
+            trd_env=self.trading_environment,
+            acc_id=acc_id,
+            order_market=self.trading_market,
+        )
+        if ret != RET_OK:
+            logger.error("History order list query failed: code=%s, start=%s, end=%s, error=%s", code, start, end, data)
             return None
         return data
 
