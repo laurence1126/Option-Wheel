@@ -26,6 +26,7 @@ def send_daily_summary(strategy: ShortPutStrategy) -> bool:
 
     total_nav = get_net_asset_value(strategy)
     total_cash = get_total_cash(strategy, capped=False)
+    strategy_cash = _get_strategy_cash(strategy)
     strategy_positions = _get_strategy_position_rows(strategy, position)
     strategy_market_value = _get_strategy_market_value(strategy_positions)
 
@@ -33,16 +34,18 @@ def send_daily_summary(strategy: ShortPutStrategy) -> bool:
         strategy_id=strategy.strategy_id,
         total_nav=total_nav,
         total_cash=total_cash,
+        strategy_cash=strategy_cash,
         strategy_market_value=strategy_market_value,
         positions=strategy._put_option_position,
         position_rows=strategy_positions,
     )
     strategy.engine.telegram.send_message(message, parse_mode="HTML")
     logger.info(
-        "Daily summary sent: strategy_id=%s, total_nav=%s, total_cash=%s, strategy_market_value=%s, position_count=%s.",
+        "Daily summary sent: strategy_id=%s, total_nav=%s, total_cash=%s, strategy_cash=%s, strategy_market_value=%s, position_count=%s.",
         strategy.strategy_id,
         total_nav,
         total_cash,
+        strategy_cash,
         strategy_market_value,
         len(strategy._put_option_position),
     )
@@ -76,10 +79,18 @@ def _get_strategy_market_value(position: pd.DataFrame) -> float:
     return float(sum(values))
 
 
+def _get_strategy_cash(strategy: ShortPutStrategy) -> float:
+    premium_collected = sum(
+        abs(option.qty) * option.price * 100 for option in strategy._put_option_position if option.qty and option.qty < 0 and option.price
+    )
+    return float(premium_collected)
+
+
 def _build_daily_summary_message(
     strategy_id: str,
     total_nav: float | None,
     total_cash: float | None,
+    strategy_cash: float,
     strategy_market_value: float,
     positions: list,
     position_rows: pd.DataFrame,
@@ -90,7 +101,8 @@ def _build_daily_summary_message(
         "",
         f"Total NAV: <b>{_fmt_money(total_nav)}</b>",
         f"Total Cash: <b>{_fmt_money(total_cash)}</b>",
-        f"MV (Strategy): <b>{_fmt_money(strategy_market_value)}</b>",
+        f"Strategy Cash: <b>{_fmt_money(strategy_cash)}</b>",
+        f"Strategy MV: <b>{_fmt_money(strategy_market_value)}</b>",
         "",
         "<b>Strategy Positions</b>",
     ]

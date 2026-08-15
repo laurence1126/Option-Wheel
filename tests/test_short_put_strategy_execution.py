@@ -657,7 +657,8 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         self.assertIn("Strategy: <b>short_put_spy</b>", message["text"])
         self.assertIn("Total NAV: <b>$99,740.00</b>", message["text"])
         self.assertIn("Total Cash: <b>$100,000.00</b>", message["text"])
-        self.assertIn("MV (Strategy): <b>$-260.00</b>", message["text"])
+        self.assertIn("Strategy Cash: <b>$250.00</b>", message["text"])
+        self.assertIn("Strategy MV: <b>$-260.00</b>", message["text"])
         self.assertIn("<b>Strategy Positions</b>", message["text"])
         self.assertIn("SPY 723.00 Put (2026-05-27)", message["text"])
         self.assertIn(" • SPY 723.00 Put (2026-05-27)\n   Qty: -2 | Avg: 1.2500 | PnL: $-10.00", message["text"])
@@ -683,7 +684,8 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         result = send_daily_summary(strategy)
 
         self.assertTrue(result)
-        self.assertIn("MV (Strategy): <b>$0.00</b>", engine.telegram.messages[0]["text"])
+        self.assertIn("Strategy Cash: <b>$0.00</b>", engine.telegram.messages[0]["text"])
+        self.assertIn("Strategy MV: <b>$0.00</b>", engine.telegram.messages[0]["text"])
         self.assertIn("<b>Strategy Positions</b>\n • N/A", engine.telegram.messages[0]["text"])
 
     def test_account_snapshot_writes_strategy_json_file(self):

@@ -11,7 +11,7 @@ from futu import TrdSide
 
 from ..utils.account_state import get_net_asset_value, get_total_cash, update_put_position
 from ..utils.option_parsing import resolve_option_info, resolve_option_name
-from .daily_summary import _get_strategy_market_value, _get_strategy_position_rows
+from .daily_summary import _get_strategy_cash, _get_strategy_market_value, _get_strategy_position_rows
 
 from app.utils.logging import configure_logger
 
@@ -59,13 +59,6 @@ def capture_account_snapshot(strategy: ShortPutStrategy, snapshot_root: str | Pa
     return True
 
 
-def _get_strategy_cash(strategy: ShortPutStrategy) -> float | None:
-    premium_collected = sum(
-        abs(option.qty) * option.price * 100 for option in strategy._put_option_position if option.qty and option.qty < 0 and option.price
-    )
-    return float(premium_collected)
-
-
 def _get_market_data_by_code(strategy: ShortPutStrategy, position: pd.DataFrame) -> dict[str, pd.Series]:
     codes = [strategy.config.underlying]
     if not position.empty and "code" in position.columns:
@@ -84,7 +77,7 @@ def _get_market_data_by_code(strategy: ShortPutStrategy, position: pd.DataFrame)
 
 
 def _get_strategy_orders(strategy: ShortPutStrategy, now: dt.datetime) -> pd.DataFrame:
-    start = now - dt.timedelta(hours=240)
+    start = now - dt.timedelta(hours=24)
     query = getattr(strategy.engine, "history_order_list_query", None)
     if not callable(query):
         logger.warning("Account snapshot skipped order history because engine has no history_order_list_query.")
