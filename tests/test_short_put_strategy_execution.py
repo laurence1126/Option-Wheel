@@ -731,9 +731,11 @@ class ShortPutStrategyExecutionTest(unittest.TestCase):
         self.assertEqual(len(payload["orders"]), 1)
         self.assertEqual(
             list(payload["orders"][0]),
-            ["name", "code", "status", "qty", "limitPrice", "filledQty", "avgPrice", "updateTime"],
+            ["name", "code", "status", "side", "qty", "limitPrice", "filledQty", "avgPrice", "updateTime"],
         )
+        self.assertEqual(payload["orders"][0]["name"], "SPY 723.00 Put (2026-05-27)")
         self.assertEqual(payload["orders"][0]["code"], "US.SPY260527P723000")
+        self.assertEqual(payload["orders"][0]["side"], "SELL")
         self.assertEqual(payload["orders"][0]["qty"], -2.0)
         self.assertEqual(payload["orders"][0]["limitPrice"], 1.25)
         self.assertEqual(payload["orders"][0]["filledQty"], -2.0)

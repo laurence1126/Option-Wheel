@@ -155,9 +155,10 @@ def _build_order_snapshots(strategy: ShortPutStrategy, orders: pd.DataFrame) -> 
     for _, row in orders.iterrows():
         snapshots.append(
             {
-                "name": _order_name(row),
+                "name": _resolved_order_name(strategy, row),
                 "code": str(row.get("code", "")),
                 "status": _json_safe(row.get("order_status")),
+                "side": _json_safe(row.get("trd_side")),
                 "qty": _signed_order_quantity(row, "qty"),
                 "limitPrice": _row_float(row, "price"),
                 "filledQty": _signed_order_quantity(row, "dealt_qty"),
@@ -172,6 +173,18 @@ def _order_name(row: pd.Series) -> str:
     return str(row.get("stock_name", row.get("name", "")))
 
 
+def _resolved_order_name(strategy: ShortPutStrategy, row: pd.Series) -> str:
+    raw_name = _order_name(row)
+    option_info = resolve_option_name(
+        raw_name,
+        strategy.engine.trading_environment,
+        code=str(row.get("code", "")),
+        qty=_row_float(row, "qty"),
+        price=_row_float(row, "dealt_avg_price") or _row_float(row, "price"),
+    )
+    return resolve_option_info(option_info) if option_info is not None else raw_name
+
+
 def _signed_order_quantity(row: pd.Series, column: str) -> float | None:
     qty = _row_float(row, column)
     if qty is None:
@@ -179,14 +192,8 @@ def _signed_order_quantity(row: pd.Series, column: str) -> float | None:
 
     side = row.get("trd_side")
     side_text = getattr(side, "name", str(side)).lower()
-    sell_sides = {TrdSide.SELL}
-    sell_short = getattr(TrdSide, "SELL_SHORT", None)
-    if sell_short is not None:
-        sell_sides.add(sell_short)
-    buy_sides = {TrdSide.BUY}
-    buy_back = getattr(TrdSide, "BUY_BACK", None)
-    if buy_back is not None:
-        buy_sides.add(buy_back)
+    sell_sides = {TrdSide.SELL, TrdSide.SELL_SHORT}
+    buy_sides = {TrdSide.BUY, TrdSide.BUY_BACK}
 
     if side in sell_sides or "sell" in side_text:
         return -abs(qty)
